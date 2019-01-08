@@ -38,8 +38,8 @@
 
 #endif
 
-#include <boost/algorithm/string/predicate.hpp>
-#include <boost/algorithm/string/trim.hpp>
+#include "absl/strings/match.h"
+#include "absl/strings/strip.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -50,12 +50,16 @@
 
 #include "arrow/util/logging.h"
 
-using boost::algorithm::contains;
-using boost::algorithm::trim;
 using std::max;
 
 namespace arrow {
 namespace internal {
+
+inline std::string trim(std::string& str) {
+    str.erase(0, str.find_first_not_of(' '));
+    str.erase(str.find_last_not_of(' ') + 1);
+    return str;
+}
 
 static struct {
   std::string name;
@@ -77,7 +81,7 @@ namespace {
 int64_t ParseCPUFlags(const std::string& values) {
   int64_t flags = 0;
   for (int i = 0; i < num_flags; ++i) {
-    if (contains(values, flag_mappings[i].name)) {
+    if (absl::StrContains(values, flag_mappings[i].name)) {
       flags |= flag_mappings[i].flag;
     }
   }
@@ -215,6 +219,8 @@ void CpuInfo::Init() {
     if (colon != std::string::npos) {
       name = line.substr(0, colon - 1);
       value = line.substr(colon + 1, std::string::npos);
+
+
       trim(name);
       trim(value);
       if (name.compare("flags") == 0) {
