@@ -48,7 +48,7 @@
 #else  // gcc / clang on POSIX platforms
 #define ARROW_WRITE_SHMODE S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH
 #endif
-
+]
 #include <boost/filesystem.hpp>
 
 // ----------------------------------------------------------------------
