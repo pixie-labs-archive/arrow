@@ -7,6 +7,7 @@
 #include "flatbuffers/flatbuffers.h"
 
 #include "Schema_generated.h"
+#include "SparseTensor_generated.h"
 #include "Tensor_generated.h"
 
 namespace org {
@@ -36,17 +37,19 @@ enum MessageHeader {
   MessageHeader_DictionaryBatch = 2,
   MessageHeader_RecordBatch = 3,
   MessageHeader_Tensor = 4,
+  MessageHeader_SparseTensor = 5,
   MessageHeader_MIN = MessageHeader_NONE,
-  MessageHeader_MAX = MessageHeader_Tensor
+  MessageHeader_MAX = MessageHeader_SparseTensor
 };
 
-inline const MessageHeader (&EnumValuesMessageHeader())[5] {
+inline const MessageHeader (&EnumValuesMessageHeader())[6] {
   static const MessageHeader values[] = {
     MessageHeader_NONE,
     MessageHeader_Schema,
     MessageHeader_DictionaryBatch,
     MessageHeader_RecordBatch,
-    MessageHeader_Tensor
+    MessageHeader_Tensor,
+    MessageHeader_SparseTensor
   };
   return values;
 }
@@ -58,6 +61,7 @@ inline const char * const *EnumNamesMessageHeader() {
     "DictionaryBatch",
     "RecordBatch",
     "Tensor",
+    "SparseTensor",
     nullptr
   };
   return names;
@@ -86,6 +90,10 @@ template<> struct MessageHeaderTraits<RecordBatch> {
 
 template<> struct MessageHeaderTraits<Tensor> {
   static const MessageHeader enum_value = MessageHeader_Tensor;
+};
+
+template<> struct MessageHeaderTraits<SparseTensor> {
+  static const MessageHeader enum_value = MessageHeader_SparseTensor;
 };
 
 bool VerifyMessageHeader(flatbuffers::Verifier &verifier, const void *obj, MessageHeader type);
@@ -287,7 +295,8 @@ struct Message FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
     VT_VERSION = 4,
     VT_HEADER_TYPE = 6,
     VT_HEADER = 8,
-    VT_BODYLENGTH = 10
+    VT_BODYLENGTH = 10,
+    VT_CUSTOM_METADATA = 12
   };
   MetadataVersion version() const {
     return static_cast<MetadataVersion>(GetField<int16_t>(VT_VERSION, 0));
@@ -311,8 +320,14 @@ struct Message FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
   const Tensor *header_as_Tensor() const {
     return header_type() == MessageHeader_Tensor ? static_cast<const Tensor *>(header()) : nullptr;
   }
+  const SparseTensor *header_as_SparseTensor() const {
+    return header_type() == MessageHeader_SparseTensor ? static_cast<const SparseTensor *>(header()) : nullptr;
+  }
   int64_t bodyLength() const {
     return GetField<int64_t>(VT_BODYLENGTH, 0);
+  }
+  const flatbuffers::Vector<flatbuffers::Offset<KeyValue>> *custom_metadata() const {
+    return GetPointer<const flatbuffers::Vector<flatbuffers::Offset<KeyValue>> *>(VT_CUSTOM_METADATA);
   }
   bool Verify(flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -321,6 +336,9 @@ struct Message FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
            VerifyOffset(verifier, VT_HEADER) &&
            VerifyMessageHeader(verifier, header(), header_type()) &&
            VerifyField<int64_t>(verifier, VT_BODYLENGTH) &&
+           VerifyOffset(verifier, VT_CUSTOM_METADATA) &&
+           verifier.VerifyVector(custom_metadata()) &&
+           verifier.VerifyVectorOfTables(custom_metadata()) &&
            verifier.EndTable();
   }
 };
@@ -341,6 +359,10 @@ template<> inline const Tensor *Message::header_as<Tensor>() const {
   return header_as_Tensor();
 }
 
+template<> inline const SparseTensor *Message::header_as<SparseTensor>() const {
+  return header_as_SparseTensor();
+}
+
 struct MessageBuilder {
   flatbuffers::FlatBufferBuilder &fbb_;
   flatbuffers::uoffset_t start_;
@@ -355,6 +377,9 @@ struct MessageBuilder {
   }
   void add_bodyLength(int64_t bodyLength) {
     fbb_.AddElement<int64_t>(Message::VT_BODYLENGTH, bodyLength, 0);
+  }
+  void add_custom_metadata(flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<KeyValue>>> custom_metadata) {
+    fbb_.AddOffset(Message::VT_CUSTOM_METADATA, custom_metadata);
   }
   explicit MessageBuilder(flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
@@ -373,13 +398,31 @@ inline flatbuffers::Offset<Message> CreateMessage(
     MetadataVersion version = MetadataVersion_V1,
     MessageHeader header_type = MessageHeader_NONE,
     flatbuffers::Offset<void> header = 0,
-    int64_t bodyLength = 0) {
+    int64_t bodyLength = 0,
+    flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<KeyValue>>> custom_metadata = 0) {
   MessageBuilder builder_(_fbb);
   builder_.add_bodyLength(bodyLength);
+  builder_.add_custom_metadata(custom_metadata);
   builder_.add_header(header);
   builder_.add_version(version);
   builder_.add_header_type(header_type);
   return builder_.Finish();
+}
+
+inline flatbuffers::Offset<Message> CreateMessageDirect(
+    flatbuffers::FlatBufferBuilder &_fbb,
+    MetadataVersion version = MetadataVersion_V1,
+    MessageHeader header_type = MessageHeader_NONE,
+    flatbuffers::Offset<void> header = 0,
+    int64_t bodyLength = 0,
+    const std::vector<flatbuffers::Offset<KeyValue>> *custom_metadata = nullptr) {
+  return org::apache::arrow::flatbuf::CreateMessage(
+      _fbb,
+      version,
+      header_type,
+      header,
+      bodyLength,
+      custom_metadata ? _fbb.CreateVector<flatbuffers::Offset<KeyValue>>(*custom_metadata) : 0);
 }
 
 inline bool VerifyMessageHeader(flatbuffers::Verifier &verifier, const void *obj, MessageHeader type) {
@@ -401,6 +444,10 @@ inline bool VerifyMessageHeader(flatbuffers::Verifier &verifier, const void *obj
     }
     case MessageHeader_Tensor: {
       auto ptr = reinterpret_cast<const Tensor *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case MessageHeader_SparseTensor: {
+      auto ptr = reinterpret_cast<const SparseTensor *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return false;

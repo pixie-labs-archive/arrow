@@ -45,6 +45,8 @@ struct Timestamp;
 
 struct Interval;
 
+struct Duration;
+
 struct KeyValue;
 
 struct DictionaryEncoding;
@@ -270,11 +272,12 @@ enum Type {
   Type_FixedSizeBinary = 15,
   Type_FixedSizeList = 16,
   Type_Map = 17,
+  Type_Duration = 18,
   Type_MIN = Type_NONE,
-  Type_MAX = Type_Map
+  Type_MAX = Type_Duration
 };
 
-inline const Type (&EnumValuesType())[18] {
+inline const Type (&EnumValuesType())[19] {
   static const Type values[] = {
     Type_NONE,
     Type_Null,
@@ -293,7 +296,8 @@ inline const Type (&EnumValuesType())[18] {
     Type_Union,
     Type_FixedSizeBinary,
     Type_FixedSizeList,
-    Type_Map
+    Type_Map,
+    Type_Duration
   };
   return values;
 }
@@ -318,6 +322,7 @@ inline const char * const *EnumNamesType() {
     "FixedSizeBinary",
     "FixedSizeList",
     "Map",
+    "Duration",
     nullptr
   };
   return names;
@@ -398,6 +403,10 @@ template<> struct TypeTraits<FixedSizeList> {
 
 template<> struct TypeTraits<Map> {
   static const Type enum_value = Type_Map;
+};
+
+template<> struct TypeTraits<Duration> {
+  static const Type enum_value = Type_Duration;
 };
 
 bool VerifyType(flatbuffers::Verifier &verifier, const void *obj, Type type);
@@ -1215,6 +1224,46 @@ inline flatbuffers::Offset<Interval> CreateInterval(
   return builder_.Finish();
 }
 
+struct Duration FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
+  enum {
+    VT_UNIT = 4
+  };
+  TimeUnit unit() const {
+    return static_cast<TimeUnit>(GetField<int16_t>(VT_UNIT, 1));
+  }
+  bool Verify(flatbuffers::Verifier &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<int16_t>(verifier, VT_UNIT) &&
+           verifier.EndTable();
+  }
+};
+
+struct DurationBuilder {
+  flatbuffers::FlatBufferBuilder &fbb_;
+  flatbuffers::uoffset_t start_;
+  void add_unit(TimeUnit unit) {
+    fbb_.AddElement<int16_t>(Duration::VT_UNIT, static_cast<int16_t>(unit), 1);
+  }
+  explicit DurationBuilder(flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  DurationBuilder &operator=(const DurationBuilder &);
+  flatbuffers::Offset<Duration> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = flatbuffers::Offset<Duration>(end);
+    return o;
+  }
+};
+
+inline flatbuffers::Offset<Duration> CreateDuration(
+    flatbuffers::FlatBufferBuilder &_fbb,
+    TimeUnit unit = TimeUnit_MILLISECOND) {
+  DurationBuilder builder_(_fbb);
+  builder_.add_unit(unit);
+  return builder_.Finish();
+}
+
 /// ----------------------------------------------------------------------
 /// user defined key value pairs to add custom metadata to arrow
 /// key namespacing is the responsibility of the user
@@ -1355,10 +1404,6 @@ inline flatbuffers::Offset<DictionaryEncoding> CreateDictionaryEncoding(
 /// ----------------------------------------------------------------------
 /// A field represents a named column in a record / row batch or child of a
 /// nested type.
-///
-/// - children is only for nested Arrow arrays
-/// - For primitive types, children will have length 0
-/// - nullable should default to true in general
 struct Field FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
   enum {
     VT_NAME = 4,
@@ -1369,15 +1414,18 @@ struct Field FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
     VT_CHILDREN = 14,
     VT_CUSTOM_METADATA = 16
   };
+  /// Name is not required, in i.e. a List
   const flatbuffers::String *name() const {
     return GetPointer<const flatbuffers::String *>(VT_NAME);
   }
+  /// Whether or not this field can contain nulls. Should be true in general.
   bool nullable() const {
     return GetField<uint8_t>(VT_NULLABLE, 0) != 0;
   }
   Type type_type() const {
     return static_cast<Type>(GetField<uint8_t>(VT_TYPE_TYPE, 0));
   }
+  /// This is the type of the decoded value if the field is dictionary encoded.
   const void *type() const {
     return GetPointer<const void *>(VT_TYPE);
   }
@@ -1433,12 +1481,19 @@ struct Field FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
   const Map *type_as_Map() const {
     return type_type() == Type_Map ? static_cast<const Map *>(type()) : nullptr;
   }
+  const Duration *type_as_Duration() const {
+    return type_type() == Type_Duration ? static_cast<const Duration *>(type()) : nullptr;
+  }
+  /// Present only if the field is dictionary encoded.
   const DictionaryEncoding *dictionary() const {
     return GetPointer<const DictionaryEncoding *>(VT_DICTIONARY);
   }
+  /// children apply only to nested data types like Struct, List and Union. For
+  /// primitive types children will have length 0.
   const flatbuffers::Vector<flatbuffers::Offset<Field>> *children() const {
     return GetPointer<const flatbuffers::Vector<flatbuffers::Offset<Field>> *>(VT_CHILDREN);
   }
+  /// User-defined metadata
   const flatbuffers::Vector<flatbuffers::Offset<KeyValue>> *custom_metadata() const {
     return GetPointer<const flatbuffers::Vector<flatbuffers::Offset<KeyValue>> *>(VT_CUSTOM_METADATA);
   }
@@ -1528,6 +1583,10 @@ template<> inline const FixedSizeList *Field::type_as<FixedSizeList>() const {
 
 template<> inline const Map *Field::type_as<Map>() const {
   return type_as_Map();
+}
+
+template<> inline const Duration *Field::type_as<Duration>() const {
+  return type_as_Duration();
 }
 
 struct FieldBuilder {
@@ -1758,6 +1817,10 @@ inline bool VerifyType(flatbuffers::Verifier &verifier, const void *obj, Type ty
     }
     case Type_Map: {
       auto ptr = reinterpret_cast<const Map *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case Type_Duration: {
+      auto ptr = reinterpret_cast<const Duration *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return false;

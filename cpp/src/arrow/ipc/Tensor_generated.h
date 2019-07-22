@@ -17,6 +17,8 @@ struct TensorDim;
 
 struct Tensor;
 
+/// ----------------------------------------------------------------------
+/// Data structures for dense tensors
 /// Shape data for a single axis in a tensor
 struct TensorDim FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
   enum {
@@ -149,6 +151,9 @@ struct Tensor FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
   const Map *type_as_Map() const {
     return type_type() == Type_Map ? static_cast<const Map *>(type()) : nullptr;
   }
+  const Duration *type_as_Duration() const {
+    return type_type() == Type_Duration ? static_cast<const Duration *>(type()) : nullptr;
+  }
   /// The dimensions of the tensor, optionally named
   const flatbuffers::Vector<flatbuffers::Offset<TensorDim>> *shape() const {
     return GetPointer<const flatbuffers::Vector<flatbuffers::Offset<TensorDim>> *>(VT_SHAPE);
@@ -242,6 +247,10 @@ template<> inline const FixedSizeList *Tensor::type_as<FixedSizeList>() const {
 
 template<> inline const Map *Tensor::type_as<Map>() const {
   return type_as_Map();
+}
+
+template<> inline const Duration *Tensor::type_as<Duration>() const {
+  return type_as_Duration();
 }
 
 struct TensorBuilder {
