@@ -31,8 +31,8 @@
 #include "arrow/memory_pool.h"
 #include "arrow/status.h"
 #include "arrow/table.h"
-#include "arrow/test-common.h"
-#include "arrow/test-util.h"
+#include "arrow/testing/gtest_common.h"
+#include "arrow/testing/gtest_util.h"
 #include "arrow/type.h"
 #include "arrow/type_traits.h"
 #include "arrow/util/decimal.h"
@@ -41,9 +41,6 @@
 #include "arrow/compute/kernel.h"
 #include "arrow/compute/kernels/util-internal.h"
 #include "arrow/compute/test-util.h"
-
-using std::shared_ptr;
-using std::vector;
 
 namespace arrow {
 namespace compute {
@@ -59,6 +56,8 @@ void CheckImplicitConstructor(enum Datum::type expected_kind) {
 }
 
 TEST(TestDatum, ImplicitConstructors) {
+  CheckImplicitConstructor<Scalar>(Datum::SCALAR);
+
   CheckImplicitConstructor<Array>(Datum::ARRAY);
 
   // Instantiate from array subclass
@@ -66,24 +65,18 @@ TEST(TestDatum, ImplicitConstructors) {
 
   CheckImplicitConstructor<ChunkedArray>(Datum::CHUNKED_ARRAY);
   CheckImplicitConstructor<RecordBatch>(Datum::RECORD_BATCH);
+
   CheckImplicitConstructor<Table>(Datum::TABLE);
 }
 
 class TestInvokeBinaryKernel : public ComputeFixture, public TestBase {};
 
-class DummyBinaryKernel : public BinaryKernel {
-  Status Call(FunctionContext* ctx, const Datum& left, const Datum& right,
-              Datum* out) override {
-    return Status::OK();
-  }
-};
-
 TEST_F(TestInvokeBinaryKernel, Exceptions) {
-  DummyBinaryKernel kernel;
+  MockBinaryKernel kernel;
   std::vector<Datum> outputs;
   std::shared_ptr<Table> table;
-  vector<bool> values1 = {true, false, true};
-  vector<bool> values2 = {false, true, false};
+  std::vector<bool> values1 = {true, false, true};
+  std::vector<bool> values2 = {false, true, false};
 
   auto type = boolean();
   auto a1 = _MakeArray<BooleanType, bool>(type, values1, {});

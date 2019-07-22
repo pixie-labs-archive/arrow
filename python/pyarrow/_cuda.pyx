@@ -15,29 +15,41 @@
 # specific language governing permissions and limitations
 # under the License.
 
+
+from __future__ import absolute_import
+
 from pyarrow.compat import tobytes
 from pyarrow.lib cimport *
 from pyarrow.includes.libarrow_cuda cimport *
-from pyarrow.lib import py_buffer, allocate_buffer, as_buffer
+from pyarrow.lib import py_buffer, allocate_buffer, as_buffer, ArrowTypeError
+from pyarrow.util import get_contiguous_span
 cimport cpython as cp
 
 
 cdef class Context:
-    """ CUDA driver context.
+    """
+    CUDA driver context.
     """
 
-    def __cinit__(self, int device_number=0, uintptr_t handle=0):
-        """Construct the shared CUDA driver context for a particular device.
+    def __init__(self, *args, **kwargs):
+        """
+        Create a CUDA driver context for a particular device.
+
+        If a CUDA context handle is passed, it is wrapped, otherwise
+        a default CUDA context for the given device is requested.
 
         Parameters
         ----------
-        device_number : int
-          Specify the gpu device for which the CUDA driver context is
+        device_number : int (default 0)
+          Specify the GPU device for which the CUDA driver context is
           requested.
-        handle : int
-          Specify handle for a shared context that has been created by
-          another library.
+        handle : int, optional
+          Specify CUDA handle for a shared context that has been created
+          by another library.
         """
+        # This method exposed because autodoc doesn't pick __cinit__
+
+    def __cinit__(self, int device_number=0, uintptr_t handle=0):
         cdef CCudaDeviceManager* manager
         check_status(CCudaDeviceManager.GetInstance(&manager))
         cdef int n = manager.num_devices()
@@ -55,13 +67,14 @@ cdef class Context:
 
     @staticmethod
     def from_numba(context=None):
-        """Create Context instance from a numba CUDA context.
+        """
+        Create a Context instance from a Numba CUDA context.
 
         Parameters
         ----------
         context : {numba.cuda.cudadrv.driver.Context, None}
-          Specify numba CUDA context instance. When None, use the
-          current numba context.
+          A Numba CUDA context instance.
+          If None, the current Numba context is used.
 
         Returns
         -------
@@ -75,7 +88,8 @@ cdef class Context:
                        handle=context.handle.value)
 
     def to_numba(self):
-        """Convert Context to numba CUDA context.
+        """
+        Convert Context to a Numba CUDA context.
 
         Returns
         -------
@@ -127,9 +141,39 @@ cdef class Context:
 
     @property
     def bytes_allocated(self):
-        """ Return the number of allocated bytes.
+        """Return the number of allocated bytes.
         """
         return self.context.get().bytes_allocated()
+
+    def get_device_address(self, address):
+        """Return the device address that is reachable from kernels running in
+        the context
+
+        Parameters
+        ----------
+        address : int
+          Specify memory address value
+
+        Returns
+        -------
+        device_address : int
+          Device address accessible from device context
+
+        Notes
+        -----
+        The device address is defined as a memory address accessible
+        by device. While it is often a device memory address but it
+        can be also a host memory address, for instance, when the
+        memory is allocated as host memory (using cudaMallocHost or
+        cudaHostAlloc) or as managed memory (using cudaMallocManaged)
+        or the host memory is page-locked (using cudaHostRegister).
+        """
+        cdef:
+            uintptr_t c_addr = address
+            uint8_t* c_devaddr
+        check_status(self.context.get().GetDeviceAddress(<uint8_t*>c_addr,
+                                                         &c_devaddr))
+        return <uintptr_t>c_devaddr
 
     def new_buffer(self, nbytes):
         """Return new device buffer.
@@ -148,33 +192,41 @@ cdef class Context:
         check_status(self.context.get().Allocate(nbytes, &cudabuf))
         return pyarrow_wrap_cudabuffer(cudabuf)
 
-    def foreign_buffer(self, address, size):
-        """Create device buffer from device address and size as a view.
+    def foreign_buffer(self, address, size, base=None):
+        """Create device buffer from address and size as a view.
 
         The caller is responsible for allocating and freeing the
-        memory as well as ensuring that the memory belongs to the
-        CUDA context that this Context instance holds.
+        memory. When `address==size==0` then a new zero-sized buffer
+        is returned.
 
         Parameters
         ----------
         address : int
-          Specify the starting address of the buffer.
+          Specify the starting address of the buffer. The address can
+          refer to both device or host memory but it must be
+          accessible from device after mapping it with
+          `get_device_address` method.
         size : int
           Specify the size of device buffer in bytes.
+        base : {None, object}
+          Specify object that owns the referenced memory.
 
         Returns
         -------
         cbuf : CudaBuffer
-          Device buffer as a view of device memory.
+          Device buffer as a view of device reachable memory.
+
         """
+        if not address and size == 0:
+            return self.new_buffer(0)
         cdef:
-            intptr_t c_addr = address
+            uintptr_t c_addr = self.get_device_address(address)
             int64_t c_size = size
             shared_ptr[CCudaBuffer] cudabuf
         check_status(self.context.get().View(<uint8_t*>c_addr,
                                              c_size,
                                              &cudabuf))
-        return pyarrow_wrap_cudabuffer(cudabuf)
+        return pyarrow_wrap_cudabuffer_base(cudabuf, base)
 
     def open_ipc_buffer(self, ipc_handle):
         """ Open existing CUDA IPC memory handle
@@ -236,9 +288,52 @@ cdef class Context:
             result.copy_from_device(buf, position=0, nbytes=size)
         return result
 
+    def buffer_from_object(self, obj):
+        """Create device buffer view of arbitrary object that references
+        device accessible memory.
+
+        When the object contains a non-contiguous view of device
+        accessbile memory then the returned device buffer will contain
+        contiguous view of the memory, that is, including the
+        intermediate data that is otherwise invisible to the input
+        object.
+
+        Parameters
+        ----------
+        obj : {object, Buffer, HostBuffer, CudaBuffer, ...}
+          Specify an object that holds (device or host) address that
+          can be accessed from device. This includes objects with
+          types defined in pyarrow.cuda as well as arbitrary objects
+          that implement the CUDA array interface as defined by numba.
+
+        Returns
+        -------
+        cbuf : CudaBuffer
+          Device buffer as a view of device accessible memory.
+
+        """
+        if isinstance(obj, HostBuffer):
+            return self.foreign_buffer(obj.address, obj.size, base=obj)
+        elif isinstance(obj, Buffer):
+            return CudaBuffer.from_buffer(obj)
+        elif isinstance(obj, CudaBuffer):
+            return obj
+        elif hasattr(obj, '__cuda_array_interface__'):
+            desc = obj.__cuda_array_interface__
+            addr = desc['data'][0]
+            if addr is None:
+                return self.new_buffer(0)
+            import numpy as np
+            start, end = get_contiguous_span(
+                desc['shape'], desc.get('strides'),
+                np.dtype(desc['typestr']).itemsize)
+            return self.foreign_buffer(addr + start, end - start, base=obj)
+        raise ArrowTypeError('cannot create device buffer view from'
+                             ' `%s` object' % (type(obj)))
+
 
 cdef class IpcMemHandle:
-    """A container for a CUDA IPC handle.
+    """A serializable container for a CUDA IPC handle.
     """
     cdef void init(self, shared_ptr[CCudaIpcMemHandle]& h):
         self.handle = h
@@ -285,14 +380,10 @@ cdef class IpcMemHandle:
 cdef class CudaBuffer(Buffer):
     """An Arrow buffer with data located in a GPU device.
 
-    To create a CudaBuffer instance, use
+    To create a CudaBuffer instance, use Context.device_buffer().
 
-      <Context instance>.device_buffer(data=<object>, offset=<offset>,
-                                       size=<nbytes>)
-
-    The memory allocated in CudaBuffer instance is freed when the
-    instance is deleted.
-
+    The memory allocated in a CudaBuffer is freed when the buffer object
+    is deleted.
     """
 
     def __init__(self):
@@ -300,9 +391,12 @@ cdef class CudaBuffer(Buffer):
                         "`<pyarrow.Context instance>.device_buffer`"
                         " method instead.")
 
-    cdef void init_cuda(self, const shared_ptr[CCudaBuffer]& buffer):
+    cdef void init_cuda(self,
+                        const shared_ptr[CCudaBuffer]& buffer,
+                        object base):
         self.cuda_buffer = buffer
         self.init(<shared_ptr[CBuffer]> buffer)
+        self.base = base
 
     @staticmethod
     def from_buffer(buf):
@@ -337,7 +431,9 @@ cdef class CudaBuffer(Buffer):
           Device buffer as a view of numba MemoryPointer.
         """
         ctx = Context.from_numba(mem.context)
-        return ctx.foreign_buffer(mem.device_pointer.value, mem.size)
+        if mem.device_pointer.value is None and mem.size==0:
+            return ctx.new_buffer(0)
+        return ctx.foreign_buffer(mem.device_pointer.value, mem.size, base=mem)
 
     def to_numba(self):
         """Return numba memory pointer of CudaBuffer instance.
@@ -472,15 +568,12 @@ cdef class CudaBuffer(Buffer):
     def copy_from_device(self, buf, int64_t position=0, int64_t nbytes=-1):
         """Copy data from device to device.
 
-        The destination device buffer must be pre-allocated within the
-        same context as source device buffer.
-
         Parameters
         ----------
         buf : CudaBuffer
           Specify source device buffer.
         position : int
-          Specify the starting position of the copy in devive buffer.
+          Specify the starting position of the copy in device buffer.
           Default: 0.
         nbytes : int
           Specify the number of bytes to copy. Default: -1 (all from
@@ -492,9 +585,6 @@ cdef class CudaBuffer(Buffer):
           Number of bytes copied.
 
         """
-        if self.context.handle != buf.context.handle:
-            raise ValueError('device source and destination buffers must be '
-                             'within the same context')
         if position < 0 or position > self.size:
             raise ValueError('position argument is out-of-range')
         cdef int64_t nbytes_
@@ -516,9 +606,18 @@ cdef class CudaBuffer(Buffer):
 
         cdef shared_ptr[CCudaBuffer] buf_ = pyarrow_unwrap_cudabuffer(buf)
         cdef int64_t position_ = position
-        with nogil:
-            check_status(self.cuda_buffer.get().
-                         CopyFromDevice(position_, buf_.get().data(), nbytes_))
+        cdef shared_ptr[CCudaContext] src_ctx_ = pyarrow_unwrap_cudacontext(
+            buf.context)
+        if self.context.handle != buf.context.handle:
+            with nogil:
+                check_status(self.cuda_buffer.get().
+                             CopyFromAnotherDevice(src_ctx_, position_,
+                                                   buf_.get().data(), nbytes_))
+        else:
+            with nogil:
+                check_status(self.cuda_buffer.get().
+                             CopyFromDevice(position_, buf_.get().data(),
+                                            nbytes_))
         return nbytes_
 
     def export_for_ipc(self):
@@ -529,7 +628,7 @@ cdef class CudaBuffer(Buffer):
         After calling this function, this device memory will not be
         freed when the CudaBuffer is destructed.
 
-        Results
+        Returns
         -------
         ipc_handle : IpcMemHandle
           The exported IPC handle
@@ -774,9 +873,9 @@ def serialize_record_batch(object batch, object ctx):
     Parameters
     ----------
     batch : RecordBatch
-      Specify record batch to write
+      Record batch to write
     ctx : Context
-      Specify context to allocate device memory from
+      CUDA Context to allocate device memory from
 
     Returns
     -------
@@ -797,14 +896,14 @@ def read_message(object source, pool=None):
     Parameters
     ----------
     source : {CudaBuffer, cuda.BufferReader}
-      Specify device buffer or reader of device buffer.
-    pool : {MemoryPool, None}
-      Specify pool to allocate CPU memory for the metadata
+      Device buffer or reader of device buffer.
+    pool : MemoryPool (optional)
+      Pool to allocate CPU memory for the metadata
 
     Returns
     -------
     message : Message
-      the deserialized message, body still on device
+      The deserialized message, body still on device
     """
     cdef:
         Message result = Message.__new__(Message)
@@ -824,16 +923,16 @@ def read_record_batch(object buffer, object schema, pool=None):
     Parameters
     ----------
     buffer :
-      Specify device buffer containing the complete IPC message
+      Device buffer containing the complete IPC message
     schema : Schema
-      Specify schema for the record batch
-    pool : {MemoryPool, None}
-      Specify pool to use for allocating space for the metadata
+      The schema for the record batch
+    pool : MemoryPool (optional)
+      Pool to allocate metadata from
 
     Returns
     -------
     batch : RecordBatch
-      reconstructed record batch, with device pointers
+      Reconstructed record batch, with device pointers
 
     """
     cdef shared_ptr[CSchema] schema_ = pyarrow_unwrap_schema(schema)
@@ -857,9 +956,16 @@ cdef public api bint pyarrow_is_cudabuffer(object buffer):
 
 
 cdef public api object \
+        pyarrow_wrap_cudabuffer_base(const shared_ptr[CCudaBuffer]& buf, base):
+    cdef CudaBuffer result = CudaBuffer.__new__(CudaBuffer)
+    result.init_cuda(buf, base)
+    return result
+
+
+cdef public api object \
         pyarrow_wrap_cudabuffer(const shared_ptr[CCudaBuffer]& buf):
     cdef CudaBuffer result = CudaBuffer.__new__(CudaBuffer)
-    result.init_cuda(buf)
+    result.init_cuda(buf, None)
     return result
 
 

@@ -35,27 +35,43 @@
 #include "gandiva/gandiva_aliases.h"
 #include "gandiva/llvm_types.h"
 #include "gandiva/lvalue.h"
+#include "gandiva/selection_vector.h"
 #include "gandiva/value_validity_pair.h"
+#include "gandiva/visibility.h"
 
 namespace gandiva {
 
 class FunctionHolder;
 
 /// Builds an LLVM module and generates code for the specified set of expressions.
-class LLVMGenerator {
+class GANDIVA_EXPORT LLVMGenerator {
  public:
   /// \brief Factory method to initialize the generator.
   static Status Make(std::shared_ptr<Configuration> config,
                      std::unique_ptr<LLVMGenerator>* llvm_generator);
 
-  /// \brief Build the code for the expression trees. Each element in the vector
-  /// represents an expression tree
-  Status Build(const ExpressionVector& exprs);
+  /// \brief Build the code for the expression trees for default mode. Each
+  /// element in the vector represents an expression tree
+  Status Build(const ExpressionVector& exprs, SelectionVector::Mode mode);
 
-  /// \brief Execute the built expression against the provided arguments.
+  /// \brief Build the code for the expression trees for default mode. Each
+  /// element in the vector represents an expression tree
+  Status Build(const ExpressionVector& exprs) {
+    return Build(exprs, SelectionVector::Mode::MODE_NONE);
+  }
+
+  /// \brief Execute the built expression against the provided arguments for
+  /// default mode.
   Status Execute(const arrow::RecordBatch& record_batch,
                  const ArrayDataVector& output_vector);
 
+  /// \brief Execute the built expression against the provided arguments for
+  /// all modes. Only works on the records specified in the selection_vector.
+  Status Execute(const arrow::RecordBatch& record_batch,
+                 const SelectionVector* selection_vector,
+                 const ArrayDataVector& output_vector);
+
+  SelectionVector::Mode selection_vector_mode() { return selection_vector_mode_; }
   LLVMTypes* types() { return engine_->types(); }
   llvm::Module* module() { return engine_->module(); }
 
@@ -119,12 +135,13 @@ class LLVMGenerator {
                                           bool with_validity, bool with_context);
 
     // Generate code to onvoke a function call.
-    LValuePtr BuildFunctionCall(const NativeFunction* func,
+    LValuePtr BuildFunctionCall(const NativeFunction* func, DataTypePtr arrow_return_type,
                                 std::vector<llvm::Value*>* params);
 
     // Generate code for an if-else condition.
     LValuePtr BuildIfElse(llvm::Value* condition, std::function<LValuePtr()> then_func,
-                          std::function<LValuePtr()> else_func, llvm::Type* result_type);
+                          std::function<LValuePtr()> else_func,
+                          DataTypePtr arrow_return_type);
 
     // Switch to the entry_block and get reference of the validity/value/offsets buffer
     llvm::Value* GetBufferReference(int idx, BufferType buffer_type, FieldPtr field);
@@ -146,8 +163,8 @@ class LLVMGenerator {
     bool has_arena_allocs_;
   };
 
-  // Generate the code for one expression, with the output of the expression going to
-  // 'output'.
+  // Generate the code for one expression for default mode, with the output of
+  // the expression going to 'output'.
   Status Add(const ExpressionPtr expr, const FieldDescriptorPtr output);
 
   /// Generate code to load the vector at specified index in the 'arg_addrs' array.
@@ -163,9 +180,13 @@ class LLVMGenerator {
   /// Generate code to load the vector at specified index and cast it as offsets array.
   llvm::Value* GetOffsetsReference(llvm::Value* arg_addrs, int idx, FieldPtr field);
 
+  /// Generate code to load the vector at specified index and cast it as buffer pointer.
+  llvm::Value* GetDataBufferPtrReference(llvm::Value* arg_addrs, int idx, FieldPtr field);
+
   /// Generate code for the value array of one expression.
   Status CodeGenExprValue(DexPtr value_expr, FieldDescriptorPtr output, int suffix_idx,
-                          llvm::Function** fn);
+                          llvm::Function** fn,
+                          SelectionVector::Mode selection_vector_mode);
 
   /// Generate code to load the local bitmap specified index and cast it as bitmap.
   llvm::Value* GetLocalBitMapReference(llvm::Value* arg_bitmaps, int idx);
@@ -184,6 +205,10 @@ class LLVMGenerator {
   void ClearPackedBitValueIfFalse(llvm::Value* bitmap, llvm::Value* position,
                                   llvm::Value* value);
 
+  // Generate code to build a DecimalLValue with specified value/precision/scale.
+  std::shared_ptr<DecimalLValue> BuildDecimalLValue(llvm::Value* value,
+                                                    DataTypePtr arrow_type);
+
   /// Generate code to make a function call (to a pre-compiled IR function) which takes
   /// 'args' and has a return type 'ret_type'.
   llvm::Value* AddFunctionCall(const std::string& full_name, llvm::Type* ret_type,
@@ -194,8 +219,10 @@ class LLVMGenerator {
   /// \param[in] compiled_expr the compiled expression (includes the bitmap indices to be
   ///            used for computing the validity bitmap of the result).
   /// \param[in] eval_batch (includes input/output buffer addresses)
+  /// \param[in] selection_vector the list of selected positions
   void ComputeBitMapsForExpr(const CompiledExpr& compiled_expr,
-                             const EvalBatch& eval_batch);
+                             const EvalBatch& eval_batch,
+                             const SelectionVector* selection_vector);
 
   /// Replace the %T in the trace msg with the correct type corresponding to 'type'
   /// eg. %d for int32, %ld for int64, ..
@@ -209,6 +236,7 @@ class LLVMGenerator {
   std::vector<std::unique_ptr<CompiledExpr>> compiled_exprs_;
   FunctionRegistry function_registry_;
   Annotator annotator_;
+  SelectionVector::Mode selection_vector_mode_;
 
   // used for debug
   bool dump_ir_;

@@ -34,6 +34,10 @@ public final class AutoCloseables {
   private AutoCloseables() {
   }
 
+  /**
+   * Returns a new {@link AutoCloseable} that calls {@link #close(Iterable)} on <code>autoCloseables</code>
+   * when close is called.
+   */
   public static AutoCloseable all(final Collection<? extends AutoCloseable> autoCloseables) {
     return new AutoCloseable() {
       @Override
@@ -106,6 +110,9 @@ public final class AutoCloseables {
     }
   }
 
+  /**
+   * Calls {@link #close(Iterable)} on the flattened list of closeables.
+   */
   @SafeVarargs
   public static void close(Iterable<? extends AutoCloseable>...closeables) throws Exception {
     close(Arrays.asList(closeables).stream()
@@ -113,6 +120,9 @@ public final class AutoCloseables {
         .collect(Collectors.toList()));
   }
 
+  /**
+   * Converts <code>ac</code> to a {@link Iterable} filtering out any null values.
+   */
   public static Iterable<AutoCloseable> iter(AutoCloseable... ac) {
     if (ac.length == 0) {
       return Collections.emptyList();
@@ -144,10 +154,16 @@ public final class AutoCloseables {
       return t;
     }
 
+    /**
+     * Add all of <code>list</code> to the rollback list.
+     */
     public void addAll(AutoCloseable... list) {
       closeables.addAll(Arrays.asList(list));
     }
 
+    /**
+     * Add all of <code>list</code> to the rollback list.
+     */
     public void addAll(Iterable<? extends AutoCloseable> list) {
       for (AutoCloseable ac : list) {
         closeables.add(ac);
@@ -167,15 +183,18 @@ public final class AutoCloseables {
 
   }
 
+  /**
+   * Creates an {@link RollbackCloseable} from the given closeables.
+   */
   public static RollbackCloseable rollbackable(AutoCloseable... closeables) {
     return new RollbackCloseable(closeables);
   }
 
   /**
-   * close() an {@see java.lang.AutoCloseable} without throwing a (checked)
-   * {@see java.lang.Exception}. This wraps the close() call with a
+   * close() an {@link java.lang.AutoCloseable} without throwing a (checked)
+   * {@link java.lang.Exception}. This wraps the close() call with a
    * try-catch that will rethrow an Exception wrapped with a
-   * {@see java.lang.RuntimeException}, providing a way to call close()
+   * {@link java.lang.RuntimeException}, providing a way to call close()
    * without having to do the try-catch everywhere or propagate the Exception.
    *
    * @param autoCloseable the AutoCloseable to close; may be null

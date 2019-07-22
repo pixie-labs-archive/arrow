@@ -75,8 +75,8 @@ class TypedColumnBuilder : public ColumnBuilder {
       return st;
     } else {
       std::stringstream ss;
-      ss << "In column #" << col_index_ << ": " << st.message();
-      return Status(st.code(), ss.str());
+      ss << "In CSV column #" << col_index_ << ": " << st.message();
+      return st.WithMessage(ss.str());
     }
   }
 
@@ -167,7 +167,7 @@ class InferringColumnBuilder : public ColumnBuilder {
   std::shared_ptr<Converter> converter_;
 
   // Current inference status
-  enum class InferKind { Null, Integer, Real, Timestamp, Text, Binary };
+  enum class InferKind { Null, Integer, Boolean, Real, Timestamp, Text, Binary };
 
   std::shared_ptr<DataType> infer_type_;
   InferKind infer_kind_;
@@ -191,6 +191,9 @@ Status InferringColumnBuilder::LoosenType() {
       infer_kind_ = InferKind::Integer;
       break;
     case InferKind::Integer:
+      infer_kind_ = InferKind::Boolean;
+      break;
+    case InferKind::Boolean:
       infer_kind_ = InferKind::Timestamp;
       break;
     case InferKind::Timestamp:
@@ -218,6 +221,10 @@ Status InferringColumnBuilder::UpdateType() {
       break;
     case InferKind::Integer:
       infer_type_ = int64();
+      can_loosen_type_ = true;
+      break;
+    case InferKind::Boolean:
+      infer_type_ = boolean();
       can_loosen_type_ = true;
       break;
     case InferKind::Timestamp:
@@ -305,12 +312,12 @@ Status InferringColumnBuilder::TryConvertChunk(size_t chunk_index) {
 
 void InferringColumnBuilder::Insert(int64_t block_index,
                                     const std::shared_ptr<BlockParser>& parser) {
-  DCHECK_NE(converter_, nullptr);
-
   // Create a slot for the new chunk and spawn a task to convert it
   size_t chunk_index = static_cast<size_t>(block_index);
   {
     std::lock_guard<std::mutex> lock(mutex_);
+
+    DCHECK_NE(converter_, nullptr);
     if (chunks_.size() <= chunk_index) {
       chunks_.resize(chunk_index + 1);
     }

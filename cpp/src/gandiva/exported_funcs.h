@@ -45,6 +45,18 @@ class ExportedContextFunctions : public ExportedFuncsBase {
 };
 REGISTER_EXPORTED_FUNCS(ExportedContextFunctions);
 
+// Class for exporting Time functions
+class ExportedTimeFunctions : public ExportedFuncsBase {
+  void AddMappings(Engine* engine) const override;
+};
+REGISTER_EXPORTED_FUNCS(ExportedTimeFunctions);
+
+// Class for exporting Decimal functions
+class ExportedDecimalFunctions : public ExportedFuncsBase {
+  void AddMappings(Engine* engine) const override;
+};
+REGISTER_EXPORTED_FUNCS(ExportedDecimalFunctions);
+
 }  // namespace gandiva
 
 #endif  // GANDIVA_EXPORTED_FUNCS_H

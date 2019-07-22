@@ -17,15 +17,17 @@
 
 //! Defines the data-types of Arrow arrays.
 //!
-//! For an overview of the terminology used within the arrow project and more general information
-//! regarding data-types and memory layouts see
+//! For an overview of the terminology used within the arrow project and more general
+//! information regarding data-types and memory layouts see
 //! [here](https://arrow.apache.org/docs/memory_layout.html).
 
 use std::fmt;
 use std::mem::size_of;
+use std::ops::{Add, Div, Mul, Sub};
 use std::slice::from_raw_parts;
 use std::str::FromStr;
 
+use packed_simd::*;
 use serde_derive::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -33,8 +35,8 @@ use crate::error::{ArrowError, Result};
 
 /// The possible relative types that are supported.
 ///
-/// The variants of this enum include primitive fixed size types as well as parametric or nested
-/// types.
+/// The variants of this enum include primitive fixed size types as well as parametric or
+/// nested types.
 /// Currently the Rust implementation supports the following  nested types:
 ///  - `List<T>`
 ///  - `Struct<T, U, V, ...>`
@@ -42,7 +44,7 @@ use crate::error::{ArrowError, Result};
 /// Nested types can themselves be nested within other arrays.
 /// For more information on these types please see
 /// [here](https://arrow.apache.org/docs/memory_layout.html).
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum DataType {
     Boolean,
     Int8,
@@ -56,22 +58,51 @@ pub enum DataType {
     Float16,
     Float32,
     Float64,
+    Timestamp(TimeUnit),
+    Date32(DateUnit),
+    Date64(DateUnit),
+    Time32(TimeUnit),
+    Time64(TimeUnit),
+    Interval(IntervalUnit),
     Utf8,
     List(Box<DataType>),
     Struct(Vec<Field>),
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum DateUnit {
+    Day,
+    Millisecond,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum TimeUnit {
+    Second,
+    Millisecond,
+    Microsecond,
+    Nanosecond,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum IntervalUnit {
+    YearMonth,
+    DayTime,
+}
+
 /// Contains the meta-data for a single relative type.
 ///
 /// The `Schema` object is an ordered collection of `Field` objects.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Field {
     name: String,
     data_type: DataType,
     nullable: bool,
 }
 
-pub trait ArrowNativeType: Send + Sync + Copy + PartialOrd + FromStr + 'static {}
+pub trait ArrowNativeType:
+    fmt::Debug + Send + Sync + Copy + PartialOrd + FromStr + 'static
+{
+}
 
 /// Trait indicating a primitive fixed-width type (bool, ints and floats).
 pub trait ArrowPrimitiveType: 'static {
@@ -90,10 +121,20 @@ pub trait ArrowPrimitiveType: 'static {
     fn default_value() -> Self::Native;
 }
 
-macro_rules! make_type {
-    ($name:ident, $native_ty:ty, $data_ty:path, $bit_width:expr, $default_val:expr) => {
-        impl ArrowNativeType for $native_ty {}
+impl ArrowNativeType for bool {}
+impl ArrowNativeType for i8 {}
+impl ArrowNativeType for i16 {}
+impl ArrowNativeType for i32 {}
+impl ArrowNativeType for i64 {}
+impl ArrowNativeType for u8 {}
+impl ArrowNativeType for u16 {}
+impl ArrowNativeType for u32 {}
+impl ArrowNativeType for u64 {}
+impl ArrowNativeType for f32 {}
+impl ArrowNativeType for f64 {}
 
+macro_rules! make_type {
+    ($name:ident, $native_ty:ty, $data_ty:expr, $bit_width:expr, $default_val:expr) => {
         pub struct $name {}
 
         impl ArrowPrimitiveType for $name {
@@ -125,20 +166,243 @@ make_type!(UInt32Type, u32, DataType::UInt32, 32, 0u32);
 make_type!(UInt64Type, u64, DataType::UInt64, 64, 0u64);
 make_type!(Float32Type, f32, DataType::Float32, 32, 0.0f32);
 make_type!(Float64Type, f64, DataType::Float64, 64, 0.0f64);
+make_type!(
+    TimestampSecondType,
+    i64,
+    DataType::Timestamp(TimeUnit::Second),
+    64,
+    0i64
+);
+make_type!(
+    TimestampMillisecondType,
+    i64,
+    DataType::Timestamp(TimeUnit::Millisecond),
+    64,
+    0i64
+);
+make_type!(
+    TimestampMicrosecondType,
+    i64,
+    DataType::Timestamp(TimeUnit::Microsecond),
+    64,
+    0i64
+);
+make_type!(
+    TimestampNanosecondType,
+    i64,
+    DataType::Timestamp(TimeUnit::Nanosecond),
+    64,
+    0i64
+);
+make_type!(Date32Type, i32, DataType::Date32(DateUnit::Day), 32, 0i32);
+make_type!(
+    Date64Type,
+    i64,
+    DataType::Date64(DateUnit::Millisecond),
+    64,
+    0i64
+);
+make_type!(
+    Time32SecondType,
+    i32,
+    DataType::Time32(TimeUnit::Second),
+    32,
+    0i32
+);
+make_type!(
+    Time32MillisecondType,
+    i32,
+    DataType::Time32(TimeUnit::Millisecond),
+    32,
+    0i32
+);
+make_type!(
+    Time64MicrosecondType,
+    i64,
+    DataType::Time64(TimeUnit::Microsecond),
+    64,
+    0i64
+);
+make_type!(
+    Time64NanosecondType,
+    i64,
+    DataType::Time64(TimeUnit::Nanosecond),
+    64,
+    0i64
+);
+make_type!(
+    IntervalYearMonthType,
+    i64,
+    DataType::Interval(IntervalUnit::YearMonth),
+    64,
+    0i64
+);
+make_type!(
+    IntervalDayTimeType,
+    i64,
+    DataType::Interval(IntervalUnit::DayTime),
+    64,
+    0i64
+);
 
 /// A subtype of primitive type that represents numeric values.
+///
+/// SIMD operations are defined in this trait if available on the target system.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+pub trait ArrowNumericType: ArrowPrimitiveType
+where
+    Self::Simd: Add<Output = Self::Simd>
+        + Sub<Output = Self::Simd>
+        + Mul<Output = Self::Simd>
+        + Div<Output = Self::Simd>,
+{
+    /// Defines the SIMD type that should be used for this numeric type
+    type Simd;
+
+    /// Defines the SIMD Mask type that should be used for this numeric type
+    type SimdMask;
+
+    /// The number of SIMD lanes available
+    fn lanes() -> usize;
+
+    /// Loads a slice into a SIMD register
+    fn load(slice: &[Self::Native]) -> Self::Simd;
+
+    /// Gets the value of a single lane in a SIMD mask
+    fn mask_get(mask: &Self::SimdMask, idx: usize) -> bool;
+
+    /// Performs a SIMD binary operation
+    fn bin_op<F: Fn(Self::Simd, Self::Simd) -> Self::Simd>(
+        left: Self::Simd,
+        right: Self::Simd,
+        op: F,
+    ) -> Self::Simd;
+
+    // SIMD version of equal
+    fn eq(left: Self::Simd, right: Self::Simd) -> Self::SimdMask;
+
+    // SIMD version of not equal
+    fn ne(left: Self::Simd, right: Self::Simd) -> Self::SimdMask;
+
+    // SIMD version of less than
+    fn lt(left: Self::Simd, right: Self::Simd) -> Self::SimdMask;
+
+    // SIMD version of less than or equal to
+    fn le(left: Self::Simd, right: Self::Simd) -> Self::SimdMask;
+
+    // SIMD version of greater than
+    fn gt(left: Self::Simd, right: Self::Simd) -> Self::SimdMask;
+
+    // SIMD version of greater than or equal to
+    fn ge(left: Self::Simd, right: Self::Simd) -> Self::SimdMask;
+
+    /// Writes a SIMD result back to a slice
+    fn write(simd_result: Self::Simd, slice: &mut [Self::Native]);
+}
+
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
 pub trait ArrowNumericType: ArrowPrimitiveType {}
 
-impl ArrowNumericType for Int8Type {}
-impl ArrowNumericType for Int16Type {}
-impl ArrowNumericType for Int32Type {}
-impl ArrowNumericType for Int64Type {}
-impl ArrowNumericType for UInt8Type {}
-impl ArrowNumericType for UInt16Type {}
-impl ArrowNumericType for UInt32Type {}
-impl ArrowNumericType for UInt64Type {}
-impl ArrowNumericType for Float32Type {}
-impl ArrowNumericType for Float64Type {}
+macro_rules! make_numeric_type {
+    ($impl_ty:ty, $native_ty:ty, $simd_ty:ident, $simd_mask_ty:ident) => {
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        impl ArrowNumericType for $impl_ty {
+            type Simd = $simd_ty;
+
+            type SimdMask = $simd_mask_ty;
+
+            fn lanes() -> usize {
+                Self::Simd::lanes()
+            }
+
+            fn load(slice: &[Self::Native]) -> Self::Simd {
+                unsafe { Self::Simd::from_slice_unaligned_unchecked(slice) }
+            }
+
+            fn mask_get(mask: &Self::SimdMask, idx: usize) -> bool {
+                unsafe { mask.extract_unchecked(idx) }
+            }
+
+            fn bin_op<F: Fn(Self::Simd, Self::Simd) -> Self::Simd>(
+                left: Self::Simd,
+                right: Self::Simd,
+                op: F,
+            ) -> Self::Simd {
+                op(left, right)
+            }
+
+            fn eq(left: Self::Simd, right: Self::Simd) -> Self::SimdMask {
+                left.eq(right)
+            }
+
+            fn ne(left: Self::Simd, right: Self::Simd) -> Self::SimdMask {
+                left.ne(right)
+            }
+
+            fn lt(left: Self::Simd, right: Self::Simd) -> Self::SimdMask {
+                left.lt(right)
+            }
+
+            fn le(left: Self::Simd, right: Self::Simd) -> Self::SimdMask {
+                left.le(right)
+            }
+
+            fn gt(left: Self::Simd, right: Self::Simd) -> Self::SimdMask {
+                left.gt(right)
+            }
+
+            fn ge(left: Self::Simd, right: Self::Simd) -> Self::SimdMask {
+                left.ge(right)
+            }
+
+            fn write(simd_result: Self::Simd, slice: &mut [Self::Native]) {
+                unsafe { simd_result.write_to_slice_unaligned_unchecked(slice) };
+            }
+        }
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+        impl ArrowNumericType for $impl_ty {}
+    };
+}
+
+make_numeric_type!(Int8Type, i8, i8x64, m8x64);
+make_numeric_type!(Int16Type, i16, i16x32, m16x32);
+make_numeric_type!(Int32Type, i32, i32x16, m32x16);
+make_numeric_type!(Int64Type, i64, i64x8, m64x8);
+make_numeric_type!(UInt8Type, u8, u8x64, m8x64);
+make_numeric_type!(UInt16Type, u16, u16x32, m16x32);
+make_numeric_type!(UInt32Type, u32, u32x16, m32x16);
+make_numeric_type!(UInt64Type, u64, u64x8, m64x8);
+make_numeric_type!(Float32Type, f32, f32x16, m32x16);
+make_numeric_type!(Float64Type, f64, f64x8, m64x8);
+
+make_numeric_type!(TimestampSecondType, i64, i64x8, m64x8);
+make_numeric_type!(TimestampMillisecondType, i64, i64x8, m64x8);
+make_numeric_type!(TimestampMicrosecondType, i64, i64x8, m64x8);
+make_numeric_type!(TimestampNanosecondType, i64, i64x8, m64x8);
+make_numeric_type!(Date32Type, i32, i32x16, m32x16);
+make_numeric_type!(Date64Type, i64, i64x8, m64x8);
+make_numeric_type!(Time32SecondType, i32, i32x16, m32x16);
+make_numeric_type!(Time32MillisecondType, i32, i32x16, m32x16);
+make_numeric_type!(Time64MicrosecondType, i64, i64x8, m64x8);
+make_numeric_type!(Time64NanosecondType, i64, i64x8, m64x8);
+make_numeric_type!(IntervalYearMonthType, i64, i64x8, m64x8);
+make_numeric_type!(IntervalDayTimeType, i64, i64x8, m64x8);
+
+/// A subtype of primitive type that represents temporal values.
+pub trait ArrowTemporalType: ArrowPrimitiveType {}
+
+impl ArrowTemporalType for TimestampSecondType {}
+impl ArrowTemporalType for TimestampMillisecondType {}
+impl ArrowTemporalType for TimestampMicrosecondType {}
+impl ArrowTemporalType for TimestampNanosecondType {}
+impl ArrowTemporalType for Date32Type {}
+impl ArrowTemporalType for Date64Type {}
+impl ArrowTemporalType for Time32SecondType {}
+impl ArrowTemporalType for Time32MillisecondType {}
+impl ArrowTemporalType for Time64MicrosecondType {}
+impl ArrowTemporalType for Time64NanosecondType {}
+impl ArrowTemporalType for IntervalYearMonthType {}
+impl ArrowTemporalType for IntervalDayTimeType {}
 
 /// Allows conversion from supported Arrow types to a byte slice.
 pub trait ToByteSlice {
@@ -173,6 +437,59 @@ impl DataType {
                     Some(p) if p == "DOUBLE" => Ok(DataType::Float64),
                     _ => Err(ArrowError::ParseError(
                         "floatingpoint precision missing or invalid".to_string(),
+                    )),
+                },
+                Some(s) if s == "timestamp" => match map.get("unit") {
+                    Some(p) if p == "SECOND" => Ok(DataType::Timestamp(TimeUnit::Second)),
+                    Some(p) if p == "MILLISECOND" => {
+                        Ok(DataType::Timestamp(TimeUnit::Millisecond))
+                    }
+                    Some(p) if p == "MICROSECOND" => {
+                        Ok(DataType::Timestamp(TimeUnit::Microsecond))
+                    }
+                    Some(p) if p == "NANOSECOND" => {
+                        Ok(DataType::Timestamp(TimeUnit::Nanosecond))
+                    }
+                    _ => Err(ArrowError::ParseError(
+                        "timestamp unit missing or invalid".to_string(),
+                    )),
+                },
+                Some(s) if s == "date" => match map.get("unit") {
+                    Some(p) if p == "DAY" => Ok(DataType::Date32(DateUnit::Day)),
+                    Some(p) if p == "MILLISECOND" => {
+                        Ok(DataType::Date64(DateUnit::Millisecond))
+                    }
+                    _ => Err(ArrowError::ParseError(
+                        "date unit missing or invalid".to_string(),
+                    )),
+                },
+                Some(s) if s == "time" => {
+                    let unit = match map.get("unit") {
+                        Some(p) if p == "SECOND" => Ok(TimeUnit::Second),
+                        Some(p) if p == "MILLISECOND" => Ok(TimeUnit::Millisecond),
+                        Some(p) if p == "MICROSECOND" => Ok(TimeUnit::Microsecond),
+                        Some(p) if p == "NANOSECOND" => Ok(TimeUnit::Nanosecond),
+                        _ => Err(ArrowError::ParseError(
+                            "time unit missing or invalid".to_string(),
+                        )),
+                    };
+                    match map.get("bitWidth") {
+                        Some(p) if p == "32" => Ok(DataType::Time32(unit?)),
+                        Some(p) if p == "64" => Ok(DataType::Time32(unit?)),
+                        _ => Err(ArrowError::ParseError(
+                            "time bitWidth missing or invalid".to_string(),
+                        )),
+                    }
+                }
+                Some(s) if s == "interval" => match map.get("unit") {
+                    Some(p) if p == "DAY_TIME" => {
+                        Ok(DataType::Interval(IntervalUnit::DayTime))
+                    }
+                    Some(p) if p == "YEAR_MONTH" => {
+                        Ok(DataType::Interval(IntervalUnit::YearMonth))
+                    }
+                    _ => Err(ArrowError::ParseError(
+                        "interval unit missing or invalid".to_string(),
                     )),
                 },
                 Some(s) if s == "int" => match map.get("isSigned") {
@@ -231,7 +548,7 @@ impl DataType {
 
     /// Generate a JSON representation of the data type
     pub fn to_json(&self) -> Value {
-        match *self {
+        match self {
             DataType::Boolean => json!({"name": "bool"}),
             DataType::Int8 => json!({"name": "int", "bitWidth": 8, "isSigned": true}),
             DataType::Int16 => json!({"name": "int", "bitWidth": 16, "isSigned": true}),
@@ -246,14 +563,47 @@ impl DataType {
             DataType::Float64 => json!({"name": "floatingpoint", "precision": "DOUBLE"}),
             DataType::Utf8 => json!({"name": "utf8"}),
             DataType::Struct(ref fields) => {
-                let field_json_array =
-                    Value::Array(fields.iter().map(|f| f.to_json()).collect::<Vec<Value>>());
+                let field_json_array = Value::Array(
+                    fields.iter().map(|f| f.to_json()).collect::<Vec<Value>>(),
+                );
                 json!({ "fields": field_json_array })
             }
             DataType::List(ref t) => {
                 let child_json = t.to_json();
                 json!({ "name": "list", "children": child_json })
             }
+            DataType::Time32(unit) => {
+                json!({"name": "time", "bitWidth": "32", "unit": match unit {
+                    TimeUnit::Second => "SECOND",
+                    TimeUnit::Millisecond => "MILLISECOND",
+                    TimeUnit::Microsecond => "MICROSECOND",
+                    TimeUnit::Nanosecond => "NANOSECOND",
+                }})
+            }
+            DataType::Time64(unit) => {
+                json!({"name": "time", "bitWidth": "64", "unit": match unit {
+                    TimeUnit::Second => "SECOND",
+                    TimeUnit::Millisecond => "MILLISECOND",
+                    TimeUnit::Microsecond => "MICROSECOND",
+                    TimeUnit::Nanosecond => "NANOSECOND",
+                }})
+            }
+            DataType::Date32(unit) | DataType::Date64(unit) => {
+                json!({"name": "date", "unit": match unit {
+                    DateUnit::Day => "DAY",
+                    DateUnit::Millisecond => "MILLISECOND",
+                }})
+            }
+            DataType::Timestamp(unit) => json!({"name": "timestamp", "unit": match unit {
+                TimeUnit::Second => "SECOND",
+                TimeUnit::Millisecond => "MILLISECOND",
+                TimeUnit::Microsecond => "MICROSECOND",
+                TimeUnit::Nanosecond => "NANOSECOND",
+            }}),
+            DataType::Interval(unit) => json!({"name": "interval", "unit": match unit {
+                IntervalUnit::YearMonth => "YEAR_MONTH",
+                IntervalUnit::DayTime => "DAY_TIME",
+            }}),
         }
     }
 }
@@ -346,11 +696,11 @@ impl fmt::Display for Field {
 
 /// Describes the meta-data of an ordered sequence of relative types.
 ///
-/// Note that this information is only part of the meta-data and not part of the physical memory
-/// layout.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+/// Note that this information is only part of the meta-data and not part of the physical
+/// memory layout.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Schema {
-    fields: Vec<Field>,
+    pub(crate) fields: Vec<Field>,
 }
 
 impl Schema {
@@ -380,8 +730,8 @@ impl Schema {
         &self.fields
     }
 
-    /// Returns an immutable reference of a specific `Field` instance selected using an offset
-    /// within the internal `fields` vector
+    /// Returns an immutable reference of a specific `Field` instance selected using an
+    /// offset within the internal `fields` vector
     pub fn field(&self, i: usize) -> &Field {
         &self.fields[i]
     }
@@ -393,6 +743,13 @@ impl Schema {
             .iter()
             .enumerate()
             .find(|&(_, c)| c.name == name)
+    }
+
+    /// Generate a JSON representation of the `Field`
+    pub fn to_json(&self) -> Value {
+        json!({
+            "fields": self.fields.iter().map(|field| field.to_json()).collect::<Vec<Value>>(),
+        })
     }
 }
 
@@ -479,7 +836,7 @@ mod tests {
         assert_eq!(
             "{\"name\":\"address\",\"nullable\":false,\"type\":{\"fields\":[\
             {\"name\":\"street\",\"nullable\":false,\"type\":{\"name\":\"utf8\"}},\
-            {\"name\":\"zip\",\"nullable\":false,\"type\":{\"bitWidth\":16,\"isSigned\":false,\"name\":\"int\"}}]}}",
+            {\"name\":\"zip\",\"nullable\":false,\"type\":{\"name\":\"int\",\"bitWidth\":16,\"isSigned\":false}}]}}",
             f.to_json().to_string()
         );
     }
@@ -529,6 +886,70 @@ mod tests {
     }
 
     #[test]
+    fn schema_json() {
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Utf8, false),
+            Field::new("c2", DataType::Date32(DateUnit::Day), false),
+            Field::new("c3", DataType::Date64(DateUnit::Millisecond), false),
+            Field::new("c7", DataType::Time32(TimeUnit::Second), false),
+            Field::new("c8", DataType::Time32(TimeUnit::Millisecond), false),
+            Field::new("c9", DataType::Time32(TimeUnit::Microsecond), false),
+            Field::new("c10", DataType::Time32(TimeUnit::Nanosecond), false),
+            Field::new("c11", DataType::Time64(TimeUnit::Second), false),
+            Field::new("c12", DataType::Time64(TimeUnit::Millisecond), false),
+            Field::new("c13", DataType::Time64(TimeUnit::Microsecond), false),
+            Field::new("c14", DataType::Time64(TimeUnit::Nanosecond), false),
+            Field::new("c15", DataType::Timestamp(TimeUnit::Second), false),
+            Field::new("c16", DataType::Timestamp(TimeUnit::Millisecond), false),
+            Field::new("c17", DataType::Timestamp(TimeUnit::Microsecond), false),
+            Field::new("c18", DataType::Timestamp(TimeUnit::Nanosecond), false),
+            Field::new("c19", DataType::Interval(IntervalUnit::DayTime), false),
+            Field::new("c20", DataType::Interval(IntervalUnit::YearMonth), false),
+            Field::new(
+                "c21",
+                DataType::Struct(vec![
+                    Field::new("a", DataType::Utf8, false),
+                    Field::new("b", DataType::UInt16, false),
+                ]),
+                false,
+            ),
+        ]);
+
+        let json = schema.to_json().to_string();
+        assert_eq!(json, "{\"fields\":[{\"name\":\"c1\",\"nullable\":false,\"type\":{\"name\":\"utf8\"}},\
+        {\"name\":\"c2\",\"nullable\":false,\"type\":{\"name\":\"date\",\"unit\":\"DAY\"}},\
+        {\"name\":\"c3\",\"nullable\":false,\"type\":{\"name\":\"date\",\"unit\":\"MILLISECOND\"}},\
+        {\"name\":\"c7\",\"nullable\":false,\"type\":{\"name\":\"time\",\"bitWidth\":\"32\",\"unit\":\"SECOND\"}},\
+        {\"name\":\"c8\",\"nullable\":false,\"type\":{\"name\":\"time\",\"bitWidth\":\"32\",\"unit\":\"MILLISECOND\"}},\
+        {\"name\":\"c9\",\"nullable\":false,\"type\":{\"name\":\"time\",\"bitWidth\":\"32\",\"unit\":\"MICROSECOND\"}},\
+        {\"name\":\"c10\",\"nullable\":false,\"type\":{\"name\":\"time\",\"bitWidth\":\"32\",\"unit\":\"NANOSECOND\"}},\
+        {\"name\":\"c11\",\"nullable\":false,\"type\":{\"name\":\"time\",\"bitWidth\":\"64\",\"unit\":\"SECOND\"}},\
+        {\"name\":\"c12\",\"nullable\":false,\"type\":{\"name\":\"time\",\"bitWidth\":\"64\",\"unit\":\"MILLISECOND\"}},\
+        {\"name\":\"c13\",\"nullable\":false,\"type\":{\"name\":\"time\",\"bitWidth\":\"64\",\"unit\":\"MICROSECOND\"}},\
+        {\"name\":\"c14\",\"nullable\":false,\"type\":{\"name\":\"time\",\"bitWidth\":\"64\",\"unit\":\"NANOSECOND\"}},\
+        {\"name\":\"c15\",\"nullable\":false,\"type\":{\"name\":\"timestamp\",\"unit\":\"SECOND\"}},\
+        {\"name\":\"c16\",\"nullable\":false,\"type\":{\"name\":\"timestamp\",\"unit\":\"MILLISECOND\"}},\
+        {\"name\":\"c17\",\"nullable\":false,\"type\":{\"name\":\"timestamp\",\"unit\":\"MICROSECOND\"}},\
+        {\"name\":\"c18\",\"nullable\":false,\"type\":{\"name\":\"timestamp\",\"unit\":\"NANOSECOND\"}},\
+        {\"name\":\"c19\",\"nullable\":false,\"type\":{\"name\":\"interval\",\"unit\":\"DAY_TIME\"}},\
+        {\"name\":\"c20\",\"nullable\":false,\"type\":{\"name\":\"interval\",\"unit\":\"YEAR_MONTH\"}},\
+        {\"name\":\"c21\",\"nullable\":false,\"type\":{\"fields\":[\
+        {\"name\":\"a\",\"nullable\":false,\"type\":{\"name\":\"utf8\"}},\
+        {\"name\":\"b\",\"nullable\":false,\"type\":{\"name\":\"int\",\"bitWidth\":16,\"isSigned\":false}}]}}]}");
+
+        // convert back to a schema
+        let value: Value = serde_json::from_str(&json).unwrap();
+        let schema2 = DataType::from(&value).unwrap();
+
+        match schema2 {
+            DataType::Struct(fields) => {
+                assert_eq!(schema.fields().len(), fields.len());
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
     fn create_schema_string() {
         let _person = Schema::new(vec![
             Field::new("first_name", DataType::Utf8, false),
@@ -569,4 +990,32 @@ mod tests {
         assert_eq!(_person.fields()[0].is_nullable(), false);
     }
 
+    #[test]
+    fn schema_equality() {
+        let schema1 = Schema::new(vec![
+            Field::new("c1", DataType::Utf8, false),
+            Field::new("c2", DataType::Float64, true),
+        ]);
+        let schema2 = Schema::new(vec![
+            Field::new("c1", DataType::Utf8, false),
+            Field::new("c2", DataType::Float64, true),
+        ]);
+
+        assert_eq!(schema1, schema2);
+
+        let schema3 = Schema::new(vec![
+            Field::new("c1", DataType::Utf8, false),
+            Field::new("c2", DataType::Float32, true),
+        ]);
+        let schema4 = Schema::new(vec![
+            Field::new("C1", DataType::Utf8, false),
+            Field::new("C2", DataType::Float64, true),
+        ]);
+
+        assert!(schema1 != schema3);
+        assert!(schema1 != schema4);
+        assert!(schema2 != schema3);
+        assert!(schema2 != schema4);
+        assert!(schema3 != schema4);
+    }
 }

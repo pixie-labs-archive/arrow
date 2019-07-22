@@ -15,11 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#include "arrow_types.h"
+#include "./arrow_types.h"
 
 namespace arrow {
 namespace r {
 SEXP symbols::units = Rf_install("units");
 SEXP symbols::xp = Rf_install(".:xp:.");
+SEXP symbols::dot_Internal = Rf_install(".Internal");
+SEXP symbols::inspect = Rf_install("inspect");
+SEXP symbols::row_names = Rf_install("row.names");
+
+void inspect(SEXP obj) {
+  Rcpp::Shield<SEXP> call_inspect(Rf_lang2(symbols::inspect, obj));
+  Rcpp::Shield<SEXP> call_internal(Rf_lang2(symbols::dot_Internal, call_inspect));
+  Rf_eval(call_internal, R_GlobalEnv);
+}
+
 }  // namespace r
 }  // namespace arrow

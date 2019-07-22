@@ -14,6 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+import io.netty.buffer.ArrowBuf;
+import org.apache.arrow.memory.ReferenceManager;
+import org.apache.arrow.vector.ValueVector;
+import org.apache.arrow.vector.types.pojo.FieldType;
+
 <@pp.dropOutputFile />
 <@pp.changeOutputFile name="/org/apache/arrow/vector/complex/UnionVector.java" />
 
@@ -70,14 +76,18 @@ public class UnionVector implements FieldVector {
   private int singleType = 0;
   private ValueVector singleVector;
 
-  private static final byte TYPE_WIDTH = 1;
   private final CallBack callBack;
   private int typeBufferAllocationSizeInBytes;
+
+  private static final byte TYPE_WIDTH = 1;
+  private static final FieldType INTERNAL_STRUCT_TYPE = new FieldType(false /*nullable*/,
+      ArrowType.Struct.INSTANCE, null /*dictionary*/, null /*metadata*/);
 
   public UnionVector(String name, BufferAllocator allocator, CallBack callBack) {
     this.name = name;
     this.allocator = allocator;
-    this.internalStruct = new NonNullableStructVector("internal", allocator, new FieldType(false, ArrowType.Struct.INSTANCE, null, null), callBack);
+    this.internalStruct = new NonNullableStructVector("internal", allocator, INTERNAL_STRUCT_TYPE,
+        callBack);
     this.typeBuffer = allocator.getEmpty();
     this.callBack = callBack;
     this.typeBufferAllocationSizeInBytes = BaseValueVector.INITIAL_VALUE_ALLOCATION * TYPE_WIDTH;
@@ -109,8 +119,8 @@ public class UnionVector implements FieldVector {
     }
 
     ArrowBuf buffer = ownBuffers.get(0);
-    typeBuffer.release();
-    typeBuffer = buffer.retain(allocator);
+    typeBuffer.getReferenceManager().release();
+    typeBuffer = buffer.getReferenceManager().retain(buffer, allocator);
     typeBufferAllocationSizeInBytes = typeBuffer.capacity();
     this.valueCount = fieldNode.getLength();
   }
@@ -289,7 +299,7 @@ public class UnionVector implements FieldVector {
     final ArrowBuf newBuf = allocator.buffer((int)newAllocationSize);
     newBuf.setBytes(0, typeBuffer, 0, currentBufferCapacity);
     newBuf.setZero(currentBufferCapacity, newBuf.capacity() - currentBufferCapacity);
-    typeBuffer.release(1);
+    typeBuffer.getReferenceManager().release(1);
     typeBuffer = newBuf;
     typeBufferAllocationSizeInBytes = (int)newAllocationSize;
   }
@@ -310,7 +320,7 @@ public class UnionVector implements FieldVector {
   @Override
   public void clear() {
     valueCount = 0;
-    typeBuffer.release();
+    typeBuffer.getReferenceManager().release();
     typeBuffer = allocator.getEmpty();
     internalStruct.clear();
   }
@@ -393,7 +403,8 @@ public class UnionVector implements FieldVector {
     @Override
     public void transfer() {
       to.clear();
-      to.typeBuffer = typeBuffer.transferOwnership(to.allocator).buffer;
+      final ReferenceManager refManager = typeBuffer.getReferenceManager();
+      to.typeBuffer = refManager.transferOwnership(typeBuffer, to.allocator).getTransferredBuffer();
       internalStructVectorTransferPair.transfer();
       to.valueCount = valueCount;
       clear();
@@ -405,7 +416,9 @@ public class UnionVector implements FieldVector {
       internalStructVectorTransferPair.splitAndTransfer(startIndex, length);
       final int startPoint = startIndex * TYPE_WIDTH;
       final int sliceLength = length * TYPE_WIDTH;
-      to.typeBuffer = typeBuffer.slice(startPoint, sliceLength).transferOwnership(to.allocator).buffer;
+      final ArrowBuf slicedBuffer = typeBuffer.slice(startPoint, sliceLength);
+      final ReferenceManager refManager = slicedBuffer.getReferenceManager();
+      to.typeBuffer = refManager.transferOwnership(slicedBuffer, to.allocator).getTransferredBuffer();
       to.setValueCount(length);
     }
 
@@ -466,8 +479,8 @@ public class UnionVector implements FieldVector {
     }
     if (clear) {
       valueCount = 0;
-      typeBuffer.retain();
-      typeBuffer.release();
+      typeBuffer.getReferenceManager().retain();
+      typeBuffer.getReferenceManager().release();
       typeBuffer = allocator.getEmpty();
     }
     return list.toArray(new ArrowBuf[list.size()]);
@@ -479,30 +492,33 @@ public class UnionVector implements FieldVector {
     return vectors.iterator();
   }
 
-
-    public Object getObject(int index) {
+    private ValueVector getVector(int index) {
       int type = typeBuffer.getByte(index * TYPE_WIDTH);
       switch (MinorType.values()[type]) {
-      case NULL:
-        return null;
+        case NULL:
+          return null;
       <#list vv.types as type>
         <#list type.minor as minor>
           <#assign name = minor.class?cap_first />
           <#assign fields = minor.fields!type.fields />
           <#assign uncappedName = name?uncap_first/>
           <#if !minor.typeParams?? >
-      case ${name?upper_case}:
-          return get${name}Vector().getObject(index);
+        case ${name?upper_case}:
+        return get${name}Vector();
           </#if>
         </#list>
       </#list>
-      case STRUCT:
-        return getStruct().getObject(index);
-      case LIST:
-        return getList().getObject(index);
-      default:
-        throw new UnsupportedOperationException("Cannot support type: " + MinorType.values()[type]);
+        case STRUCT:
+          return getStruct();
+        case LIST:
+          return getList();
+        default:
+          throw new UnsupportedOperationException("Cannot support type: " + MinorType.values()[type]);
       }
+    }
+
+    public Object getObject(int index) {
+      return getVector(index).getObject(index);
     }
 
     public byte[] get(int index) {
@@ -608,6 +624,29 @@ public class UnionVector implements FieldVector {
     }
 
     private int getTypeBufferValueCapacity() {
-      return (int) ((typeBuffer.capacity() * 1.0) / TYPE_WIDTH);
+      return typeBuffer.capacity() / TYPE_WIDTH;
+    }
+
+    @Override
+    public int hashCode(int index) {
+      return getVector(index).hashCode(index);
+    }
+
+    @Override
+    public boolean equals(int index, ValueVector to, int toIndex) {
+      if (to == null) {
+        return false;
+      }
+      if (this.getClass() != to.getClass()) {
+        return false;
+      }
+      UnionVector that = (UnionVector) to;
+      ValueVector leftVector = getVector(index);
+      ValueVector rightVector = that.getVector(toIndex);
+
+      if (leftVector.getClass() != rightVector.getClass()) {
+        return false;
+      }
+      return leftVector.equals(index, rightVector, toIndex);
     }
 }

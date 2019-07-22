@@ -23,31 +23,31 @@
 #include <string>
 #include <vector>
 
-#include <llvm/ExecutionEngine/ExecutionEngine.h>
-#include <llvm/IR/IRBuilder.h>
-#include <llvm/IR/LLVMContext.h>
-#include <llvm/IR/Module.h>
-
 #include "arrow/status.h"
 #include "arrow/util/macros.h"
 
 #include "gandiva/configuration.h"
+#include "gandiva/llvm_includes.h"
 #include "gandiva/llvm_types.h"
 #include "gandiva/logging.h"
+#include "gandiva/visibility.h"
 
 namespace gandiva {
 
+class FunctionIRBuilder;
+
 /// \brief LLVM Execution engine wrapper.
-class Engine {
+class GANDIVA_EXPORT Engine {
  public:
   llvm::LLVMContext* context() { return context_.get(); }
   llvm::IRBuilder<>* ir_builder() { return ir_builder_.get(); }
   LLVMTypes* types() { return types_.get(); }
   llvm::Module* module() { return module_; }
 
-  /// factory method to create and initialize the engine object.
+  /// Factory method to create and initialize the engine object.
   ///
-  /// \param[out] engine the created engine.
+  /// \param[in] config the engine configuration
+  /// \param[out] engine the created engine
   static Status Make(std::shared_ptr<Configuration> config,
                      std::unique_ptr<Engine>* engine);
 
@@ -79,8 +79,9 @@ class Engine {
 
   llvm::ExecutionEngine& execution_engine() { return *execution_engine_.get(); }
 
-  /// load pre-compiled IR modules and merge them into the main module.
-  Status LoadPreCompiledIRFiles(const std::string& byte_code_file_path);
+  /// load pre-compiled IR modules from precompiled_bitcode.cc and merge them into
+  /// the main module.
+  Status LoadPreCompiledIR();
 
   // Create and add mappings for cpp functions that can be accessed from LLVM.
   void AddGlobalMappings();

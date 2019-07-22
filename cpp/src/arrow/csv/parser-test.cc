@@ -26,7 +26,7 @@
 #include "arrow/csv/parser.h"
 #include "arrow/csv/test-common.h"
 #include "arrow/status.h"
-#include "arrow/test-util.h"
+#include "arrow/testing/gtest_util.h"
 
 namespace arrow {
 namespace csv {
@@ -437,6 +437,31 @@ TEST(BlockParser, Escaping) {
     AssertParseOk(parser, csv);
     AssertColumnsEq(parser, {{"a,b"}, {"c"}});
   }
+}
+
+// Generate test data with the given number of columns.
+std::string MakeLotsOfCsvColumns(int32_t num_columns) {
+  std::string values, header;
+  header.reserve(num_columns * 10);
+  values.reserve(num_columns * 10);
+  for (int x = 0; x < num_columns; x++) {
+    if (x != 0) {
+      header += ",";
+      values += ",";
+    }
+    header += "c" + std::to_string(x);
+    values += std::to_string(x);
+  }
+
+  header += "\n";
+  values += "\n";
+  return MakeCSVData({header, values});
+}
+
+TEST(BlockParser, LotsOfColumns) {
+  auto options = ParseOptions::Defaults();
+  BlockParser parser(options);
+  AssertParseOk(parser, MakeLotsOfCsvColumns(1024 * 100));
 }
 
 TEST(BlockParser, QuotedEscape) {

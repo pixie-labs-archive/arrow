@@ -33,8 +33,6 @@ except ImportError:
 
 import numpy as np
 
-import pandas as pd
-
 from pyarrow.compat import u, guid, PY2
 import pyarrow as pa
 
@@ -85,6 +83,9 @@ def test_python_file_write():
     f.close()
     assert f.closed
 
+    with pytest.raises(TypeError, match="binary file expected"):
+        pa.PythonFile(StringIO())
+
 
 def test_python_file_read():
     data = b'some sample data'
@@ -114,6 +115,26 @@ def test_python_file_read():
     assert not f.closed
     f.close()
     assert f.closed
+
+    with pytest.raises(TypeError, match="binary file expected"):
+        pa.PythonFile(StringIO(), mode='r')
+
+
+def test_python_file_read_at():
+    data = b'some sample data'
+
+    buf = BytesIO(data)
+    f = pa.PythonFile(buf, mode='r')
+
+    # test simple read at
+    v = f.read_at(nbytes=5, offset=3)
+    assert v == b'e sam'
+    assert len(v) == 5
+
+    # test reading entire file when nbytes > len(file)
+    w = f.read_at(nbytes=50, offset=0)
+    assert w == data
+    assert len(w) == 16
 
 
 def test_python_file_readall():
@@ -318,6 +339,15 @@ def test_buffer_invalid():
     with pytest.raises(TypeError,
                        match="(bytes-like object|buffer interface)"):
         pa.py_buffer(None)
+
+
+@pytest.mark.parametrize('val, expected_hex_buffer',
+                         [(b'check', b'636865636B'),
+                          (b'\a0', b'0730'),
+                          (b'', b'')])
+def test_buffer_hex(val, expected_hex_buffer):
+    buf = pa.py_buffer(val)
+    assert buf.hex() == expected_hex_buffer
 
 
 def test_buffer_to_numpy():
@@ -628,9 +658,8 @@ def test_mock_output_stream():
 
     assert f1.size() == len(f2.getvalue())
 
-    # Do the same test with a pandas DataFrame
-    val = pd.DataFrame({'a': [1, 2, 3]})
-    record_batch = pa.RecordBatch.from_pandas(val)
+    # Do the same test with a table
+    record_batch = pa.RecordBatch.from_arrays([pa.array([1, 2, 3])], ['a'])
 
     f1 = pa.MockOutputStream()
     f2 = pa.BufferOutputStream()
@@ -1134,6 +1163,44 @@ def test_input_stream_file_path_compressed(tmpdir):
     assert stream.read() == gz_data
 
 
+def test_input_stream_file_path_buffered(tmpdir):
+    data = b"some test data\n" * 10 + b"eof\n"
+    file_path = tmpdir / 'input_stream.buffered'
+    with open(str(file_path), 'wb') as f:
+        f.write(data)
+
+    stream = pa.input_stream(file_path, buffer_size=32)
+    assert stream.read() == data
+    stream = pa.input_stream(str(file_path), buffer_size=64)
+    assert stream.read() == data
+    stream = pa.input_stream(pathlib.Path(str(file_path)), buffer_size=1024)
+    assert stream.read() == data
+
+    unbuffered_stream = pa.input_stream(file_path, buffer_size=0)
+    assert isinstance(unbuffered_stream, pa.OSFile)
+
+    msg = 'Buffer size must be larger than zero'
+    with pytest.raises(ValueError, match=msg):
+        pa.input_stream(file_path, buffer_size=-1)
+    with pytest.raises(TypeError):
+        pa.input_stream(file_path, buffer_size='million')
+
+
+def test_input_stream_file_path_compressed_and_buffered(tmpdir):
+    data = b"some test data\n" * 100 + b"eof\n"
+    gz_data = gzip_compress(data)
+    file_path = tmpdir / 'input_stream_compressed_and_buffered.gz'
+    with open(str(file_path), 'wb') as f:
+        f.write(gz_data)
+
+    stream = pa.input_stream(file_path, buffer_size=32, compression='gzip')
+    assert stream.read() == data
+    stream = pa.input_stream(str(file_path), buffer_size=64)
+    assert stream.read() == data
+    stream = pa.input_stream(pathlib.Path(str(file_path)), buffer_size=1024)
+    assert stream.read() == data
+
+
 def test_input_stream_python_file(tmpdir):
     data = b"some test data\n" * 10 + b"eof\n"
     bio = BytesIO(data)
@@ -1231,6 +1298,54 @@ def test_output_stream_file_path_compressed(tmpdir):
     assert gzip_decompress(
         check_data(file_path, data, compression='gzip')) == data
     assert check_data(file_path, data, compression=None) == data
+
+    with pytest.raises(ValueError, match='Unrecognized compression type'):
+        assert check_data(file_path, data, compression='rabbit') == data
+
+
+def test_output_stream_file_path_buffered(tmpdir):
+    data = b"some test data\n" * 10 + b"eof\n"
+    file_path = tmpdir / 'output_stream.buffered'
+
+    def check_data(file_path, data, **kwargs):
+        with pa.output_stream(file_path, **kwargs) as stream:
+            stream.write(data)
+        with open(str(file_path), 'rb') as f:
+            return f.read()
+
+    unbuffered_stream = pa.output_stream(file_path, buffer_size=0)
+    assert isinstance(unbuffered_stream, pa.OSFile)
+
+    msg = 'Buffer size must be larger than zero'
+    with pytest.raises(ValueError, match=msg):
+        assert check_data(file_path, data, buffer_size=-128) == data
+
+    assert check_data(file_path, data, buffer_size=32) == data
+    assert check_data(file_path, data, buffer_size=1024) == data
+    assert check_data(str(file_path), data, buffer_size=32) == data
+
+    result = check_data(pathlib.Path(str(file_path)), data, buffer_size=32)
+    assert result == data
+
+
+def test_output_stream_file_path_compressed_and_buffered(tmpdir):
+    data = b"some test data\n" * 100 + b"eof\n"
+    file_path = tmpdir / 'output_stream_compressed_and_buffered.gz'
+
+    def check_data(file_path, data, **kwargs):
+        with pa.output_stream(file_path, **kwargs) as stream:
+            stream.write(data)
+        with open(str(file_path), 'rb') as f:
+            return f.read()
+
+    result = check_data(file_path, data, buffer_size=32)
+    assert gzip_decompress(result) == data
+
+    result = check_data(file_path, data, buffer_size=1024)
+    assert gzip_decompress(result) == data
+
+    result = check_data(file_path, data, buffer_size=1024, compression='gzip')
+    assert gzip_decompress(result) == data
 
 
 def test_output_stream_python_file(tmpdir):

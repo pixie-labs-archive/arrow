@@ -17,15 +17,18 @@
 
 package org.apache.arrow.vector;
 
+import java.time.LocalDateTime;
+
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.complex.impl.TimeStampNanoReaderImpl;
 import org.apache.arrow.vector.complex.reader.FieldReader;
 import org.apache.arrow.vector.holders.NullableTimeStampNanoHolder;
 import org.apache.arrow.vector.holders.TimeStampNanoHolder;
 import org.apache.arrow.vector.types.Types.MinorType;
+import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.FieldType;
+import org.apache.arrow.vector.util.DateUtility;
 import org.apache.arrow.vector.util.TransferPair;
-import org.joda.time.LocalDateTime;
 
 /**
  * TimeStampNanoVector implements a fixed width vector (8 bytes) of
@@ -56,6 +59,18 @@ public class TimeStampNanoVector extends TimeStampVector {
    */
   public TimeStampNanoVector(String name, FieldType fieldType, BufferAllocator allocator) {
     super(name, fieldType, allocator);
+    reader = new TimeStampNanoReaderImpl(TimeStampNanoVector.this);
+  }
+
+  /**
+   * Instantiate a TimeStampNanoVector. This doesn't allocate any memory for
+   * the data in vector.
+   *
+   * @param field Field materialized by this vector
+   * @param allocator allocator for memory management.
+   */
+  public TimeStampNanoVector(Field field, BufferAllocator allocator) {
+    super(field, allocator);
     reader = new TimeStampNanoReaderImpl(TimeStampNanoVector.this);
   }
 
@@ -115,10 +130,7 @@ public class TimeStampNanoVector extends TimeStampVector {
       return null;
     } else {
       final long nanos = valueBuffer.getLong(index * TYPE_WIDTH);
-      final long millis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(nanos);
-      final org.joda.time.LocalDateTime localDateTime = new org.joda.time.LocalDateTime(millis,
-              org.joda.time.DateTimeZone.UTC);
-      return localDateTime;
+      return DateUtility.getLocalDateTimeFromEpochNano(nanos);
     }
   }
 

@@ -17,35 +17,27 @@
 
 @echo on
 
+@rem create conda environment for compiling
 conda update --yes --quiet conda
 
-conda create -n arrow -q -y python=%PYTHON% ^
-      six pytest setuptools numpy=%NUMPY% pandas cython
+call conda create -n wheel-build -q -y -c conda-forge ^
+    --file=%ARROW_SRC%\ci\conda_env_cpp.yml ^
+    --file=%ARROW_SRC%\ci\conda_env_gandiva.yml ^
+    python=%PYTHON_VERSION% ^
+    numpy=%NUMPY_VERSION% ^
+    || exit /B
 
-conda install -n arrow -q -y -c conda-forge ^
-      git flatbuffers rapidjson ^
-      cmake ^
-      boost-cpp thrift-cpp ^
-      gflags snappy zlib brotli zstd lz4-c double-conversion
+call activate wheel-build
 
-call activate arrow
-
-pushd %ARROW_SRC%
-
-@rem fix up symlinks
-git config core.symlinks true
-git reset --hard || exit /B
-git checkout "%PYARROW_REF%" || exit /B
-
-popd
+@rem Cannot use conda_env_python.yml here because conda-forge has
+@rem ceased providing up-to-date packages for Python 3.5
+pip install -r %ARROW_SRC%\python\requirements-wheel.txt
 
 set ARROW_HOME=%CONDA_PREFIX%\Library
 set PARQUET_HOME=%CONDA_PREFIX%\Library
-set ARROW_BUILD_TOOLCHAIN=%CONDA_PREFIX%\Library
-
 echo %ARROW_HOME%
 
-@rem Build and test Arrow C++ libraries
+@rem Build Arrow C++ libraries
 mkdir %ARROW_SRC%\cpp\build
 pushd %ARROW_SRC%\cpp\build
 
@@ -54,37 +46,49 @@ cmake -G "%GENERATOR%" ^
       -DARROW_BOOST_USE_SHARED=OFF ^
       -DARROW_BUILD_TESTS=OFF ^
       -DCMAKE_BUILD_TYPE=Release ^
+      -DARROW_DEPENDENCY_SOURCE=CONDA ^
+      -DOPENSSL_ROOT_DIR=%CONDA_PREFIX%/Library ^
       -DARROW_CXXFLAGS="/MP" ^
+      -DARROW_FLIGHT=ON ^
       -DARROW_PYTHON=ON ^
       -DARROW_PARQUET=ON ^
-      ..  || exit /B
-cmake --build . --target INSTALL --config Release  || exit /B
-
-@rem Needed so python-test.exe works
-set PYTHONPATH=%CONDA_PREFIX%\Lib;%CONDA_PREFIX%\Lib\site-packages;%CONDA_PREFIX%\python35.zip;%CONDA_PREFIX%\DLLs;%CONDA_PREFIX%
-ctest -VV  || exit /B
+      -DARROW_GANDIVA=ON ^
+      -Duriparser_SOURCE=BUNDLED ^
+      -Dzlib_SOURCE=BUNDLED ^
+      .. || exit /B
+cmake --build . --target install --config Release || exit /B
 popd
 
-@rem Build and import pyarrow
-set PYTHONPATH=
-
-pushd %ARROW_SRC%\python
 set PYARROW_BUILD_TYPE=Release
+set PYARROW_PARALLEL=8
+@rem Flight and Gandiva are not supported on Python 2.7,
+@rem but we don't build 2.7 wheels for Windows.
+set PYARROW_WITH_FLIGHT=1
+set PYARROW_WITH_GANDIVA=1
+set PYARROW_WITH_PARQUET=1
+set PYARROW_WITH_STATIC_BOOST=1
+set PYARROW_BUNDLE_ARROW_CPP=1
 set SETUPTOOLS_SCM_PRETEND_VERSION=%PYARROW_VERSION%
 
-python setup.py build_ext ^
-       --with-parquet ^
-       --with-static-boost ^
-       --bundle-arrow-cpp ^
-       bdist_wheel  || exit /B
+pushd %ARROW_SRC%\python
+python setup.py bdist_wheel || exit /B
 popd
 
-@rem test the wheel
 call deactivate
-conda create -n wheel-test -q -y python=%PYTHON% ^
-      numpy=%NUMPY% pandas pytest hypothesis
+
+set ARROW_TEST_DATA=%ARROW_SRC%\testing\data
+
+@rem test the wheel
+@rem TODO For maximum reliability, we should test in a plain virtualenv instead.
+call conda create -n wheel-test -q -y python=%PYTHON_VERSION% ^
+      numpy=%NUMPY_VERSION% pandas cython pytest hypothesis || exit /B
 call activate wheel-test
 
-pip install --no-index --find-links=%ARROW_SRC%\python\dist\ pyarrow
-python -c "import pyarrow; import pyarrow.parquet"
-pytest --pyargs pyarrow
+@rem install the built wheel
+pip install -vv --no-index --find-links=%ARROW_SRC%\python\dist\ pyarrow || exit /B
+
+@rem test the imports
+python -c "import pyarrow; import pyarrow.parquet; import pyarrow.flight; import pyarrow.gandiva;" || exit /B
+
+@rem run the python tests
+pytest -rs --pyargs pyarrow || exit /B

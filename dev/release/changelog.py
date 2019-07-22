@@ -77,9 +77,9 @@ def format_changelog_markdown(issues, out):
 
 def _escape_for_markdown(x):
     return (
-        x.replace('_', '\_')  # underscores
-        .replace('`', '\`')   # backticks
-        .replace('*', '\*')   # asterisks
+        x.replace('_', r'\_')  # underscores
+        .replace('`', r'\`')   # backticks
+        .replace('*', r'\*')   # asterisks
     )
 
 
@@ -152,7 +152,7 @@ def append_changelog(version, changelog_path):
     print(''.join(old_changelog[19:]), file=result)
 
     with open(changelog_path, 'w') as f:
-        f.write(result.getvalue())
+        f.write(result.getvalue().rstrip() + '\n')
 
 
 if __name__ == '__main__':

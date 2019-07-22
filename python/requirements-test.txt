@@ -1,4 +1,6 @@
-pandas
-pytest
+cython
 hypothesis
+pandas
 pathlib2; python_version < "3.4"
+pytest
+pytz

@@ -40,6 +40,7 @@
 #include "arrow/util/macros.h"
 #include "arrow/util/task-group.h"
 #include "arrow/util/thread-pool.h"
+#include "arrow/util/utf8.h"
 
 namespace arrow {
 
@@ -75,6 +76,15 @@ class BaseTableReader : public csv::TableReader {
         convert_options_(convert_options) {}
 
  protected:
+  Status ReadFirstBlock() {
+    RETURN_NOT_OK(ReadNextBlock());
+    const uint8_t* data;
+    RETURN_NOT_OK(util::SkipUTF8BOM(cur_data_, cur_size_, &data));
+    cur_size_ -= data - cur_data_;
+    cur_data_ = data;
+    return Status::OK();
+  }
+
   // Read a next data block, stitch it to trailing data
   Status ReadNextBlock() {
     bool trailing_data = cur_size_ > 0;
@@ -196,13 +206,13 @@ class BaseTableReader : public csv::TableReader {
     DCHECK_EQ(column_builders_.size(), static_cast<uint32_t>(num_cols_));
 
     std::vector<std::shared_ptr<Field>> fields;
-    std::vector<std::shared_ptr<Column>> columns;
+    std::vector<std::shared_ptr<ChunkedArray>> columns;
 
     for (int32_t i = 0; i < num_cols_; ++i) {
       std::shared_ptr<ChunkedArray> array;
       RETURN_NOT_OK(column_builders_[i]->Finish(&array));
-      columns.push_back(std::make_shared<Column>(column_names_[i], array));
-      fields.push_back(columns.back()->field());
+      fields.push_back(::arrow::field(column_names_[i], array->type()));
+      columns.emplace_back(std::move(array));
     }
     *out = Table::Make(schema(fields), columns);
     return Status::OK();
@@ -253,7 +263,7 @@ class SerialTableReader : public BaseTableReader {
     task_group_ = internal::TaskGroup::MakeSerial();
 
     // First block
-    RETURN_NOT_OK(ReadNextBlock());
+    RETURN_NOT_OK(ReadFirstBlock());
     if (eof_) {
       return Status::Invalid("Empty CSV file");
     }
@@ -329,7 +339,7 @@ class ThreadedTableReader : public BaseTableReader {
     Chunker chunker(parse_options_);
 
     // Get first block and process header serially
-    RETURN_NOT_OK(ReadNextBlock());
+    RETURN_NOT_OK(ReadFirstBlock());
     if (eof_) {
       return Status::Invalid("Empty CSV file");
     }

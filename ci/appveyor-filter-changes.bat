@@ -22,6 +22,34 @@ if "%JOB%" == "Rust" (
         echo ===
         appveyor exit
     )
+) else if "%JOB:~,5%" == "MinGW" (
+    if "%ARROW_CI_RUBY_AFFECTED%" == "0" (
+        echo ===
+        echo === No C++, GLib or Ruby changes, exiting job
+        echo ===
+        appveyor exit
+    )
+) else if "%JOB%" == "C#" (
+    if "%ARROW_CI_CSHARP_AFFECTED%" == "0" (
+        echo ===
+        echo === No C# changes, exiting job
+        echo ===
+        appveyor exit
+    )
+) else if "%JOB%" == "Go" (
+    if "%ARROW_CI_GO_AFFECTED%" == "0" (
+        echo ===
+        echo === No Go changes, exiting job
+        echo ===
+        appveyor exit
+    )
+) else if "%JOB:~,2%" == "R " (
+    if "%ARROW_CI_R_AFFECTED%" == "0" (
+        echo ===
+        echo === No C++ or R changes, exiting job
+        echo ===
+        appveyor exit
+    )
 ) else (
     if "%ARROW_CI_PYTHON_AFFECTED%" == "0" (
         echo ===

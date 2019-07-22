@@ -17,6 +17,10 @@
 
 module Helper
   module Buildable
+    def build_null_array(values)
+      build_array(Arrow::NullArrayBuilder.new, values)
+    end
+
     def build_boolean_array(values)
       build_array(Arrow::BooleanArrayBuilder.new, values)
     end
@@ -101,8 +105,8 @@ module Helper
       build_array(Arrow::StringArrayBuilder.new, values)
     end
 
-    def build_list_array(value_data_type, values_list)
-      value_field = Arrow::Field.new("value", value_data_type)
+    def build_list_array(value_data_type, values_list, field_name: "value")
+      value_field = Arrow::Field.new(field_name, value_data_type)
       data_type = Arrow::ListDataType.new(value_field)
       builder = Arrow::ListArrayBuilder.new(data_type)
       values_list.each do |values|
@@ -153,15 +157,15 @@ module Helper
       end
     end
 
-    def build_table(arrays)
-      fields = arrays.collect do |name, array|
-        Arrow::Field.new(name, array.value_data_type)
+    def build_table(columns)
+      fields = []
+      arrays = []
+      columns.each do |name, array|
+        fields << Arrow::Field.new(name, array.value_data_type)
+        arrays << array
       end
       schema = Arrow::Schema.new(fields)
-      columns = arrays.collect.with_index do |(_name, array), i|
-        Arrow::Column.new(fields[i], array)
-      end
-      Arrow::Table.new(schema, columns)
+      Arrow::Table.new(schema, arrays)
     end
 
     def build_record_batch(arrays)

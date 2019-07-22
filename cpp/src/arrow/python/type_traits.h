@@ -149,6 +149,7 @@ template <>
 struct arrow_traits<Type::BOOL> {
   static constexpr int npy_type = NPY_BOOL;
   static constexpr bool supports_nulls = false;
+  typedef typename npy_traits<NPY_BOOL>::value_type T;
 };
 
 #define INT_DECL(TYPE)                                     \
@@ -290,7 +291,7 @@ static inline int NumPyTypeSize(int npy_type) {
     case NPY_OBJECT:
       return sizeof(void*);
     default:
-      DCHECK(false) << "unhandled numpy type";
+      ARROW_CHECK(false) << "unhandled numpy type";
       break;
   }
   return -1;

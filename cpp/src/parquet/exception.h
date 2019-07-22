@@ -23,8 +23,7 @@
 #include <string>
 
 #include "arrow/status.h"
-
-#include "parquet/util/macros.h"
+#include "parquet/platform.h"
 
 // PARQUET-1085
 #if !defined(ARROW_UNUSED)
@@ -77,7 +76,7 @@ class ParquetException : public std::exception {
 
   explicit ParquetException(const std::string& msg) : msg_(msg) {}
 
-  explicit ParquetException(const char* msg, std::exception& e) : msg_(msg) {}
+  explicit ParquetException(const char* msg, std::exception&) : msg_(msg) {}
 
   ~ParquetException() throw() override {}
 

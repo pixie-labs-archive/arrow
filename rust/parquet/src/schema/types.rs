@@ -38,7 +38,7 @@ pub type ColumnDescPtr = Rc<ColumnDescriptor>;
 /// Used to describe primitive leaf fields and structs, including top-level schema.
 /// Note that the top-level schema type is represented using `GroupType` whose
 /// repetition is `None`.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Type {
     PrimitiveType {
         basic_info: BasicTypeInfo,
@@ -55,7 +55,10 @@ pub enum Type {
 
 impl Type {
     /// Creates primitive type builder with provided field name and physical type.
-    pub fn primitive_type_builder(name: &str, physical_type: PhysicalType) -> PrimitiveTypeBuilder {
+    pub fn primitive_type_builder(
+        name: &str,
+        physical_type: PhysicalType,
+    ) -> PrimitiveTypeBuilder {
         PrimitiveTypeBuilder::new(name, physical_type)
     }
 
@@ -104,7 +107,8 @@ impl Type {
     /// This method can be used to check if projected columns are part of the root schema.
     pub fn check_contains(&self, sub_type: &Type) -> bool {
         // Names match, and repetitions match or not set for both
-        let basic_match = self.get_basic_info().name() == sub_type.get_basic_info().name()
+        let basic_match = self.get_basic_info().name()
+            == sub_type.get_basic_info().name()
             && (self.is_schema() && sub_type.is_schema()
                 || !self.is_schema()
                     && !sub_type.is_schema()
@@ -191,13 +195,13 @@ impl<'a> PrimitiveTypeBuilder<'a> {
         }
     }
 
-    /// Sets [`Repetition`](`::basic::Repetition`) for this field and returns itself.
+    /// Sets [`Repetition`](crate::basic::Repetition) for this field and returns itself.
     pub fn with_repetition(mut self, repetition: Repetition) -> Self {
         self.repetition = repetition;
         self
     }
 
-    /// Sets [`LogicalType`](`::basic::LogicalType`) for this field and returns itself.
+    /// Sets [`LogicalType`](crate::basic::LogicalType) for this field and returns itself.
     pub fn with_logical_type(mut self, logical_type: LogicalType) -> Self {
         self.logical_type = logical_type;
         self
@@ -314,8 +318,9 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                         }
                     }
                     PhysicalType::FIXED_LEN_BYTE_ARRAY => {
-                        let max_precision =
-                            (2f64.powi(8 * self.length - 1) - 1f64).log10().floor() as i32;
+                        let max_precision = (2f64.powi(8 * self.length - 1) - 1f64)
+                            .log10()
+                            .floor() as i32;
 
                         if self.precision > max_precision {
                             return Err(general_err!(
@@ -357,7 +362,9 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                 }
             }
             LogicalType::INTERVAL => {
-                if self.physical_type != PhysicalType::FIXED_LEN_BYTE_ARRAY || self.length != 12 {
+                if self.physical_type != PhysicalType::FIXED_LEN_BYTE_ARRAY
+                    || self.length != 12
+                {
                     return Err(general_err!(
                         "INTERVAL can only annotate FIXED_LEN_BYTE_ARRAY(12)"
                     ));
@@ -409,13 +416,13 @@ impl<'a> GroupTypeBuilder<'a> {
         }
     }
 
-    /// Sets [`Repetition`](`::basic::Repetition`) for this field and returns itself.
+    /// Sets [`Repetition`](crate::basic::Repetition) for this field and returns itself.
     pub fn with_repetition(mut self, repetition: Repetition) -> Self {
         self.repetition = Some(repetition);
         self
     }
 
-    /// Sets [`LogicalType`](`::basic::LogicalType`) for this field and returns itself.
+    /// Sets [`LogicalType`](crate::basic::LogicalType) for this field and returns itself.
     pub fn with_logical_type(mut self, logical_type: LogicalType) -> Self {
         self.logical_type = logical_type;
         self
@@ -451,7 +458,7 @@ impl<'a> GroupTypeBuilder<'a> {
 
 /// Basic type info. This contains information such as the name of the type,
 /// the repetition level, the logical type and the kind of the type (group, primitive).
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BasicTypeInfo {
     name: String,
     repetition: Option<Repetition>,
@@ -472,13 +479,13 @@ impl BasicTypeInfo {
         self.repetition.is_some()
     }
 
-    /// Returns [`Repetition`](`::basic::Repetition`) value for the type.
+    /// Returns [`Repetition`](crate::basic::Repetition) value for the type.
     pub fn repetition(&self) -> Repetition {
         assert!(self.repetition.is_some());
         self.repetition.unwrap()
     }
 
-    /// Returns [`LogicalType`](`::basic::LogicalType`) value for the type.
+    /// Returns [`LogicalType`](crate::basic::LogicalType) value for the type.
     pub fn logical_type(&self) -> LogicalType {
         self.logical_type
     }
@@ -612,13 +619,19 @@ impl ColumnDescriptor {
         &self.path
     }
 
-    /// Returns self type [`Type`](`::schema::types::Type`) for this leaf column.
+    /// Returns self type [`Type`](crate::schema::types::Type) for this leaf column.
     pub fn self_type(&self) -> &Type {
         self.primitive_type.as_ref()
     }
 
-    /// Returns root [`Type`](`::schema::types::Type`) (most top-level parent field) for
-    /// this leaf column.
+    /// Returns self type [`TypePtr`](crate::schema::types::TypePtr)  for this leaf
+    /// column.
+    pub fn self_type_ptr(&self) -> TypePtr {
+        self.primitive_type.clone()
+    }
+
+    /// Returns root [`Type`](crate::schema::types::Type) (most top-level parent field)
+    /// for this leaf column.
     pub fn root_type(&self) -> &Type {
         assert!(self.root_type.is_some());
         self.root_type.as_ref().unwrap()
@@ -629,7 +642,7 @@ impl ColumnDescriptor {
         self.primitive_type.name()
     }
 
-    /// Returns [`LogicalType`](`::basic::LogicalType`) for this column.
+    /// Returns [`LogicalType`](crate::basic::LogicalType) for this column.
     pub fn logical_type(&self) -> LogicalType {
         self.primitive_type.get_basic_info().logical_type()
     }
@@ -739,24 +752,37 @@ impl SchemaDescriptor {
         self.leaves.len()
     }
 
-    /// Returns column root [`Type`](`::schema::types::Type`) for a field position.
+    /// Returns column root [`Type`](crate::schema::types::Type) for a field position.
     pub fn get_column_root(&self, i: usize) -> &Type {
+        let result = self.column_root_of(i);
+        result.as_ref()
+    }
+
+    /// Returns column root [`Type`](crate::schema::types::Type) pointer for a field
+    /// position.
+    pub fn get_column_root_ptr(&self, i: usize) -> TypePtr {
+        let result = self.column_root_of(i);
+        result.clone()
+    }
+
+    fn column_root_of(&self, i: usize) -> &Rc<Type> {
         assert!(
             i < self.leaves.len(),
             "Index out of bound: {} not in [0, {})",
             i,
             self.leaves.len()
         );
+
         let result = self.leaf_to_base.get(&i);
         assert!(
             result.is_some(),
             "Expected a value for index {} but found None",
             i
         );
-        result.unwrap().as_ref()
+        result.unwrap()
     }
 
-    /// Returns schema as [`Type`](`::schema::types::Type`).
+    /// Returns schema as [`Type`](crate::schema::types::Type).
     pub fn root_schema(&self) -> &Type {
         self.schema.as_ref()
     }
@@ -846,7 +872,10 @@ pub fn from_thrift(elements: &[SchemaElement]) -> Result<TypePtr> {
 /// The first result is the starting index for the next Type after this one. If it is
 /// equal to `elements.len()`, then this Type is the last one.
 /// The second result is the result Type.
-fn from_thrift_helper(elements: &[SchemaElement], index: usize) -> Result<(usize, TypePtr)> {
+fn from_thrift_helper(
+    elements: &[SchemaElement],
+    index: usize,
+) -> Result<(usize, TypePtr)> {
     // Whether or not the current node is root (message type).
     // There is only one message type node in the schema tree.
     let is_root_node = index == 0;
@@ -904,11 +933,11 @@ fn from_thrift_helper(elements: &[SchemaElement], index: usize) -> Result<(usize
                 .with_logical_type(logical_type)
                 .with_fields(&mut fields);
             if let Some(rep) = repetition {
-                // Sometimes parquet-cpp and parquet-mr set repetition level REQUIRED or REPEATED
-                // for root node.
+                // Sometimes parquet-cpp and parquet-mr set repetition level REQUIRED or
+                // REPEATED for root node.
                 //
-                // We only set repetition for group types that are not top-level message type.
-                // According to parquet-format:
+                // We only set repetition for group types that are not top-level message
+                // type. According to parquet-format:
                 //   Root of the schema does not have a repetition_type.
                 //   All other types must have one.
                 if !is_root_node {
@@ -1338,7 +1367,8 @@ mod tests {
             .with_repetition(Repetition::REQUIRED)
             .with_logical_type(LogicalType::INT_64)
             .build()?;
-        let item2 = Type::primitive_type_builder("item2", PhysicalType::BOOLEAN).build()?;
+        let item2 =
+            Type::primitive_type_builder("item2", PhysicalType::BOOLEAN).build()?;
         let item3 = Type::primitive_type_builder("item3", PhysicalType::INT32)
             .with_repetition(Repetition::REPEATED)
             .with_logical_type(LogicalType::INT_32)

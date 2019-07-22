@@ -25,7 +25,7 @@
 #include "parquet/column_writer.h"
 #include "parquet/file_reader.h"
 #include "parquet/file_writer.h"
-#include "parquet/util/memory.h"
+#include "parquet/platform.h"
 
 #include "arrow/api.h"
 
@@ -113,8 +113,7 @@ std::shared_ptr<::arrow::Table> TableFromVector(
 
   auto field = ::arrow::field("column", type, nullable);
   auto schema = ::arrow::schema({field});
-  auto column = std::make_shared<::arrow::Column>(field, array);
-  return ::arrow::Table::Make(schema, {column});
+  return ::arrow::Table::Make(schema, {array});
 }
 
 template <>
@@ -136,17 +135,17 @@ std::shared_ptr<::arrow::Table> TableFromVector<BooleanType>(const std::vector<b
   auto field = ::arrow::field("column", ::arrow::boolean(), nullable);
   auto schema = std::make_shared<::arrow::Schema>(
       std::vector<std::shared_ptr<::arrow::Field>>({field}));
-  auto column = std::make_shared<::arrow::Column>(field, array);
-  return ::arrow::Table::Make(schema, {column});
+  return ::arrow::Table::Make(schema, {array});
 }
 
 template <bool nullable, typename ParquetType>
 static void BM_WriteColumn(::benchmark::State& state) {
-  std::vector<typename ParquetType::c_type> values(BENCHMARK_SIZE, 128);
+  using T = typename ParquetType::c_type;
+  std::vector<T> values(BENCHMARK_SIZE, static_cast<T>(128));
   std::shared_ptr<::arrow::Table> table = TableFromVector<ParquetType>(values, nullable);
 
   while (state.KeepRunning()) {
-    auto output = std::make_shared<InMemoryOutputStream>();
+    auto output = CreateOutputStream();
     EXIT_NOT_OK(
         WriteTable(*table, ::arrow::default_memory_pool(), output, BENCHMARK_SIZE));
   }
@@ -167,11 +166,15 @@ BENCHMARK_TEMPLATE2(BM_WriteColumn, true, BooleanType);
 
 template <bool nullable, typename ParquetType>
 static void BM_ReadColumn(::benchmark::State& state) {
-  std::vector<typename ParquetType::c_type> values(BENCHMARK_SIZE, 128);
+  using T = typename ParquetType::c_type;
+
+  std::vector<T> values(BENCHMARK_SIZE, static_cast<T>(128));
   std::shared_ptr<::arrow::Table> table = TableFromVector<ParquetType>(values, nullable);
-  auto output = std::make_shared<InMemoryOutputStream>();
+  auto output = CreateOutputStream();
   EXIT_NOT_OK(WriteTable(*table, ::arrow::default_memory_pool(), output, BENCHMARK_SIZE));
-  std::shared_ptr<Buffer> buffer = output->GetBuffer();
+
+  std::shared_ptr<Buffer> buffer;
+  PARQUET_THROW_NOT_OK(output->Finish(&buffer));
 
   while (state.KeepRunning()) {
     auto reader =
@@ -198,11 +201,13 @@ BENCHMARK_TEMPLATE2(BM_ReadColumn, true, BooleanType);
 static void BM_ReadIndividualRowGroups(::benchmark::State& state) {
   std::vector<int64_t> values(BENCHMARK_SIZE, 128);
   std::shared_ptr<::arrow::Table> table = TableFromVector<Int64Type>(values, true);
-  auto output = std::make_shared<InMemoryOutputStream>();
+  auto output = CreateOutputStream();
   // This writes 10 RowGroups
   EXIT_NOT_OK(
       WriteTable(*table, ::arrow::default_memory_pool(), output, BENCHMARK_SIZE / 10));
-  std::shared_ptr<Buffer> buffer = output->GetBuffer();
+
+  std::shared_ptr<Buffer> buffer;
+  PARQUET_THROW_NOT_OK(output->Finish(&buffer));
 
   while (state.KeepRunning()) {
     auto reader =
@@ -230,11 +235,12 @@ BENCHMARK(BM_ReadIndividualRowGroups);
 static void BM_ReadMultipleRowGroups(::benchmark::State& state) {
   std::vector<int64_t> values(BENCHMARK_SIZE, 128);
   std::shared_ptr<::arrow::Table> table = TableFromVector<Int64Type>(values, true);
-  auto output = std::make_shared<InMemoryOutputStream>();
+  auto output = CreateOutputStream();
   // This writes 10 RowGroups
   EXIT_NOT_OK(
       WriteTable(*table, ::arrow::default_memory_pool(), output, BENCHMARK_SIZE / 10));
-  std::shared_ptr<Buffer> buffer = output->GetBuffer();
+  std::shared_ptr<Buffer> buffer;
+  PARQUET_THROW_NOT_OK(output->Finish(&buffer));
 
   while (state.KeepRunning()) {
     auto reader =

@@ -18,7 +18,6 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
-#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -26,15 +25,12 @@
 #include "arrow/array.h"
 #include "arrow/builder.h"
 #include "arrow/status.h"
-#include "arrow/test-common.h"
-#include "arrow/test-util.h"
+#include "arrow/testing/gtest_common.h"
+#include "arrow/testing/gtest_util.h"
 #include "arrow/type.h"
 #include "arrow/util/checked_cast.h"
 
 namespace arrow {
-
-using std::string;
-using std::vector;
 
 using internal::checked_cast;
 
@@ -42,12 +38,12 @@ using internal::checked_cast;
 // Struct tests
 
 void ValidateBasicStructArray(const StructArray* result,
-                              const vector<uint8_t>& struct_is_valid,
-                              const vector<char>& list_values,
-                              const vector<uint8_t>& list_is_valid,
-                              const vector<int>& list_lengths,
-                              const vector<int>& list_offsets,
-                              const vector<int32_t>& int_values) {
+                              const std::vector<uint8_t>& struct_is_valid,
+                              const std::vector<char>& list_values,
+                              const std::vector<uint8_t>& list_is_valid,
+                              const std::vector<int>& list_lengths,
+                              const std::vector<int>& list_offsets,
+                              const std::vector<int32_t>& int_values) {
   ASSERT_EQ(4, result->length());
   ASSERT_OK(ValidateArray(*result));
 
@@ -80,6 +76,63 @@ void ValidateBasicStructArray(const StructArray* result,
   }
 }
 
+TEST(StructArray, FromFieldNames) {
+  std::shared_ptr<Array> a, b, c, array, expected;
+  a = ArrayFromJSON(int32(), "[4, null]");
+  b = ArrayFromJSON(utf8(), R"([null, "foo"])");
+
+  auto res = StructArray::Make({a, b}, {"a", "b"});
+  ASSERT_OK(res);
+  array = *res;
+  expected = ArrayFromJSON(struct_({field("a", int32()), field("b", utf8())}),
+                           R"([{"a": 4, "b": null}, {"a": null, "b": "foo"}])");
+  AssertArraysEqual(*array, *expected);
+
+  // With non-zero offsets
+  res = StructArray::Make({a, b}, {"a", "b"}, /*null_bitmap =*/nullptr, /*null_count =*/0,
+                          /*offset =*/1);
+  ASSERT_OK(res);
+  array = *res;
+  expected = ArrayFromJSON(struct_({field("a", int32()), field("b", utf8())}),
+                           R"([{"a": null, "b": "foo"}])");
+  AssertArraysEqual(*array, *expected);
+
+  res = StructArray::Make({a, b}, {"a", "b"}, /*null_bitmap =*/nullptr, /*null_count =*/0,
+                          /*offset =*/2);
+  ASSERT_OK(res);
+  array = *res;
+  expected = ArrayFromJSON(struct_({field("a", int32()), field("b", utf8())}), R"([])");
+  AssertArraysEqual(*array, *expected);
+
+  // Offset greater than length
+  res = StructArray::Make({a, b}, {"a", "b"}, /*null_bitmap =*/nullptr, /*null_count =*/0,
+                          /*offset =*/3);
+  ASSERT_RAISES(IndexError, res);
+
+  // With null bitmap
+  std::shared_ptr<Buffer> null_bitmap;
+  BitmapFromVector<bool>({false, true}, &null_bitmap);
+  res = StructArray::Make({a, b}, {"a", "b"}, null_bitmap);
+  ASSERT_OK(res);
+  array = *res;
+  expected = ArrayFromJSON(struct_({field("a", int32()), field("b", utf8())}),
+                           R"([null, {"a": null, "b": "foo"}])");
+  AssertArraysEqual(*array, *expected);
+
+  // Mismatching array lengths
+  c = ArrayFromJSON(int64(), "[1, 2, 3]");
+  res = StructArray::Make({a, c}, {"a", "c"});
+  ASSERT_RAISES(Invalid, res);
+
+  // Mismatching number of fields
+  res = StructArray::Make({a, b}, {"a", "b", "c"});
+  ASSERT_RAISES(Invalid, res);
+
+  // Fail on 0 children (cannot infer array length)
+  res = StructArray::Make({}, {});
+  ASSERT_RAISES(Invalid, res);
+}
+
 // ----------------------------------------------------------------------------------
 // Struct test
 class TestStructBuilder : public TestBuilder {
@@ -91,8 +144,8 @@ class TestStructBuilder : public TestBuilder {
     auto char_type = int8();
     auto list_type = list(char_type);
 
-    vector<std::shared_ptr<DataType>> types = {list_type, int32_type};
-    vector<std::shared_ptr<Field>> fields;
+    std::vector<std::shared_ptr<DataType>> types = {list_type, int32_type};
+    std::vector<std::shared_ptr<Field>> fields;
     fields.push_back(field("list", list_type));
     fields.push_back(field("int", int32_type));
 
@@ -112,7 +165,7 @@ class TestStructBuilder : public TestBuilder {
   }
 
  protected:
-  vector<std::shared_ptr<Field>> value_fields_;
+  std::vector<std::shared_ptr<Field>> value_fields_;
 
   std::shared_ptr<StructBuilder> builder_;
   std::shared_ptr<StructArray> result_;
@@ -153,21 +206,21 @@ TEST_F(TestStructBuilder, TestAppendNull) {
 }
 
 TEST_F(TestStructBuilder, TestBasics) {
-  vector<int32_t> int_values = {1, 2, 3, 4};
-  vector<char> list_values = {'j', 'o', 'e', 'b', 'o', 'b', 'm', 'a', 'r', 'k'};
-  vector<int> list_lengths = {3, 0, 3, 4};
-  vector<int> list_offsets = {0, 3, 3, 6, 10};
-  vector<uint8_t> list_is_valid = {1, 0, 1, 1};
-  vector<uint8_t> struct_is_valid = {1, 1, 1, 1};
+  std::vector<int32_t> int_values = {1, 2, 3, 4};
+  std::vector<char> list_values = {'j', 'o', 'e', 'b', 'o', 'b', 'm', 'a', 'r', 'k'};
+  std::vector<int> list_lengths = {3, 0, 3, 4};
+  std::vector<int> list_offsets = {0, 3, 3, 6, 10};
+  std::vector<uint8_t> list_is_valid = {1, 0, 1, 1};
+  std::vector<uint8_t> struct_is_valid = {1, 1, 1, 1};
 
   ListBuilder* list_vb = checked_cast<ListBuilder*>(builder_->field_builder(0));
   Int8Builder* char_vb = checked_cast<Int8Builder*>(list_vb->value_builder());
   Int32Builder* int_vb = checked_cast<Int32Builder*>(builder_->field_builder(1));
   ASSERT_EQ(2, static_cast<int>(builder_->num_fields()));
 
-  EXPECT_OK(builder_->Resize(list_lengths.size()));
-  EXPECT_OK(char_vb->Resize(list_values.size()));
-  EXPECT_OK(int_vb->Resize(int_values.size()));
+  ARROW_EXPECT_OK(builder_->Resize(list_lengths.size()));
+  ARROW_EXPECT_OK(char_vb->Resize(list_values.size()));
+  ARROW_EXPECT_OK(int_vb->Resize(int_values.size()));
 
   int pos = 0;
   for (size_t i = 0; i < list_lengths.size(); ++i) {
@@ -189,12 +242,12 @@ TEST_F(TestStructBuilder, TestBasics) {
 }
 
 TEST_F(TestStructBuilder, BulkAppend) {
-  vector<int32_t> int_values = {1, 2, 3, 4};
-  vector<char> list_values = {'j', 'o', 'e', 'b', 'o', 'b', 'm', 'a', 'r', 'k'};
-  vector<int> list_lengths = {3, 0, 3, 4};
-  vector<int> list_offsets = {0, 3, 3, 6};
-  vector<uint8_t> list_is_valid = {1, 0, 1, 1};
-  vector<uint8_t> struct_is_valid = {1, 1, 1, 1};
+  std::vector<int32_t> int_values = {1, 2, 3, 4};
+  std::vector<char> list_values = {'j', 'o', 'e', 'b', 'o', 'b', 'm', 'a', 'r', 'k'};
+  std::vector<int> list_lengths = {3, 0, 3, 4};
+  std::vector<int> list_offsets = {0, 3, 3, 6};
+  std::vector<uint8_t> list_is_valid = {1, 0, 1, 1};
+  std::vector<uint8_t> struct_is_valid = {1, 1, 1, 1};
 
   ListBuilder* list_vb = checked_cast<ListBuilder*>(builder_->field_builder(0));
   Int8Builder* char_vb = checked_cast<Int8Builder*>(list_vb->value_builder());
@@ -221,12 +274,12 @@ TEST_F(TestStructBuilder, BulkAppend) {
 }
 
 TEST_F(TestStructBuilder, BulkAppendInvalid) {
-  vector<int32_t> int_values = {1, 2, 3, 4};
-  vector<char> list_values = {'j', 'o', 'e', 'b', 'o', 'b', 'm', 'a', 'r', 'k'};
-  vector<int> list_lengths = {3, 0, 3, 4};
-  vector<int> list_offsets = {0, 3, 3, 6};
-  vector<uint8_t> list_is_valid = {1, 0, 1, 1};
-  vector<uint8_t> struct_is_valid = {1, 0, 1, 1};  // should be 1, 1, 1, 1
+  std::vector<int32_t> int_values = {1, 2, 3, 4};
+  std::vector<char> list_values = {'j', 'o', 'e', 'b', 'o', 'b', 'm', 'a', 'r', 'k'};
+  std::vector<int> list_lengths = {3, 0, 3, 4};
+  std::vector<int> list_offsets = {0, 3, 3, 6};
+  std::vector<uint8_t> list_is_valid = {1, 0, 1, 1};
+  std::vector<uint8_t> struct_is_valid = {1, 0, 1, 1};  // should be 1, 1, 1, 1
 
   ListBuilder* list_vb = checked_cast<ListBuilder*>(builder_->field_builder(0));
   Int8Builder* char_vb = checked_cast<Int8Builder*>(list_vb->value_builder());
@@ -257,18 +310,19 @@ TEST_F(TestStructBuilder, TestEquality) {
   std::shared_ptr<Array> unequal_bitmap_array, unequal_offsets_array,
       unequal_values_array;
 
-  vector<int32_t> int_values = {101, 102, 103, 104};
-  vector<char> list_values = {'j', 'o', 'e', 'b', 'o', 'b', 'm', 'a', 'r', 'k'};
-  vector<int> list_lengths = {3, 0, 3, 4};
-  vector<int> list_offsets = {0, 3, 3, 6};
-  vector<uint8_t> list_is_valid = {1, 0, 1, 1};
-  vector<uint8_t> struct_is_valid = {1, 1, 1, 1};
+  std::vector<int32_t> int_values = {101, 102, 103, 104};
+  std::vector<char> list_values = {'j', 'o', 'e', 'b', 'o', 'b', 'm', 'a', 'r', 'k'};
+  std::vector<int> list_lengths = {3, 0, 3, 4};
+  std::vector<int> list_offsets = {0, 3, 3, 6};
+  std::vector<uint8_t> list_is_valid = {1, 0, 1, 1};
+  std::vector<uint8_t> struct_is_valid = {1, 1, 1, 1};
 
-  vector<int32_t> unequal_int_values = {104, 102, 103, 101};
-  vector<char> unequal_list_values = {'j', 'o', 'e', 'b', 'o', 'b', 'l', 'u', 'c', 'y'};
-  vector<int> unequal_list_offsets = {0, 3, 4, 6};
-  vector<uint8_t> unequal_list_is_valid = {1, 1, 1, 1};
-  vector<uint8_t> unequal_struct_is_valid = {1, 0, 0, 1};
+  std::vector<int32_t> unequal_int_values = {104, 102, 103, 101};
+  std::vector<char> unequal_list_values = {'j', 'o', 'e', 'b', 'o',
+                                           'b', 'l', 'u', 'c', 'y'};
+  std::vector<int> unequal_list_offsets = {0, 3, 4, 6};
+  std::vector<uint8_t> unequal_list_is_valid = {1, 1, 1, 1};
+  std::vector<uint8_t> unequal_struct_is_valid = {1, 0, 0, 1};
 
   ListBuilder* list_vb = checked_cast<ListBuilder*>(builder_->field_builder(0));
   Int8Builder* char_vb = checked_cast<Int8Builder*>(list_vb->value_builder());
@@ -392,12 +446,12 @@ TEST_F(TestStructBuilder, TestSlice) {
   std::shared_ptr<Array> unequal_bitmap_array, unequal_offsets_array,
       unequal_values_array;
 
-  vector<int32_t> int_values = {101, 102, 103, 104};
-  vector<char> list_values = {'j', 'o', 'e', 'b', 'o', 'b', 'm', 'a', 'r', 'k'};
-  vector<int> list_lengths = {3, 0, 3, 4};
-  vector<int> list_offsets = {0, 3, 3, 6};
-  vector<uint8_t> list_is_valid = {1, 0, 1, 1};
-  vector<uint8_t> struct_is_valid = {1, 1, 1, 1};
+  std::vector<int32_t> int_values = {101, 102, 103, 104};
+  std::vector<char> list_values = {'j', 'o', 'e', 'b', 'o', 'b', 'm', 'a', 'r', 'k'};
+  std::vector<int> list_lengths = {3, 0, 3, 4};
+  std::vector<int> list_offsets = {0, 3, 3, 6};
+  std::vector<uint8_t> list_is_valid = {1, 0, 1, 1};
+  std::vector<uint8_t> struct_is_valid = {1, 1, 1, 1};
 
   ListBuilder* list_vb = checked_cast<ListBuilder*>(builder_->field_builder(0));
   Int8Builder* char_vb = checked_cast<Int8Builder*>(list_vb->value_builder());

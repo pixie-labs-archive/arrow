@@ -20,42 +20,77 @@
 #  find_package(LLVM)
 #
 
-set(GANDIVA_LLVM_VERSION 6.0)
-find_package(LLVM ${GANDIVA_LLVM_VERSION} REQUIRED CONFIG HINTS
-             /usr/local/opt/llvm
-             /usr/share
-             ${LLVM_DIR})
+set(LLVM_HINTS ${LLVM_ROOT} ${LLVM_DIR} /usr/lib /usr/share)
+if(LLVM_BREW_PREFIX)
+  list(APPEND LLVM_HINTS ${LLVM_BREW_PREFIX})
+endif()
+if(DEFINED ARROW_LLVM_VERSION_FALLBACK)
+  find_package(LLVM
+               ${ARROW_LLVM_VERSION}
+               CONFIG
+               HINTS
+               ${LLVM_HINTS})
+  if(NOT ${LLVM_FOUND})
+    find_package(LLVM
+                 ${ARROW_LLVM_VERSION_FALLBACK}
+                 REQUIRED
+                 CONFIG
+                 HINTS
+                 ${LLVM_HINTS})
+  endif()
+else()
+  find_package(LLVM
+               ${ARROW_LLVM_VERSION}
+               REQUIRED
+               CONFIG
+               HINTS
+               ${LLVM_HINTS})
+endif()
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 
 # Find the libraries that correspond to the LLVM components
-llvm_map_components_to_libnames(LLVM_LIBS core mcjit native ipo bitreader target linker analysis debuginfodwarf)
+llvm_map_components_to_libnames(LLVM_LIBS
+                                core
+                                mcjit
+                                native
+                                ipo
+                                bitreader
+                                target
+                                linker
+                                analysis
+                                debuginfodwarf)
 
-find_program(CLANG_EXECUTABLE clang
-  HINTS ${LLVM_TOOLS_BINARY_DIR})
-if (CLANG_EXECUTABLE)
-  message(STATUS "Found clang ${CLANG_EXECUTABLE}")
-else ()
-  message(FATAL_ERROR "Couldn't find clang")
-endif ()
-
-find_program(LLVM_LINK_EXECUTABLE llvm-link
-  HINTS ${LLVM_TOOLS_BINARY_DIR})
-if (LLVM_LINK_EXECUTABLE)
+find_program(LLVM_LINK_EXECUTABLE llvm-link HINTS ${LLVM_TOOLS_BINARY_DIR})
+if(LLVM_LINK_EXECUTABLE)
   message(STATUS "Found llvm-link ${LLVM_LINK_EXECUTABLE}")
-else ()
+else()
   message(FATAL_ERROR "Couldn't find llvm-link")
-endif ()
+endif()
+
+find_program(CLANG_EXECUTABLE
+             NAMES clang-${ARROW_LLVM_VERSION} clang-${ARROW_LLVM_MAJOR_VERSION}
+             HINTS ${LLVM_TOOLS_BINARY_DIR})
+if(CLANG_EXECUTABLE)
+  message(STATUS "Found clang ${LLVM_PACKAGE_VERSION} ${CLANG_EXECUTABLE}")
+else()
+  # If clang-7 not available, switch to normal clang.
+  find_program(CLANG_EXECUTABLE NAMES clang HINTS ${LLVM_TOOLS_BINARY_DIR})
+  if(CLANG_EXECUTABLE)
+    message(STATUS "Found clang ${CLANG_EXECUTABLE}")
+  else()
+    message(FATAL_ERROR "Couldn't find clang")
+  endif()
+endif()
 
 add_library(LLVM::LLVM_INTERFACE INTERFACE IMPORTED)
 
-set_target_properties(LLVM::LLVM_INTERFACE PROPERTIES
-  INTERFACE_INCLUDE_DIRECTORIES "${LLVM_INCLUDE_DIRS}"
-  INTERFACE_COMPILE_FLAGS "${LLVM_DEFINITIONS}"
-  INTERFACE_LINK_LIBRARIES "${LLVM_LIBS}"
-)
+set_target_properties(LLVM::LLVM_INTERFACE
+                      PROPERTIES INTERFACE_INCLUDE_DIRECTORIES
+                                 "${LLVM_INCLUDE_DIRS}"
+                                 INTERFACE_COMPILE_FLAGS
+                                 "${LLVM_DEFINITIONS}"
+                                 INTERFACE_LINK_LIBRARIES
+                                 "${LLVM_LIBS}")
 
-mark_as_advanced(
-  CLANG_EXECUTABLE
-  LLVM_LINK_EXECUTABLE
-)
+mark_as_advanced(CLANG_EXECUTABLE LLVM_LINK_EXECUTABLE)

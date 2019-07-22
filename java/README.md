@@ -28,21 +28,21 @@ install:
 ## Building and running tests
 
 ```
+git submodule update --init --recursive # Needed for flight
 cd java
 mvn install
 ```
+## Building and running tests for arrow jni modules like gandiva and orc (optional)
 
-## Building and running tests for gandiva (optional)
-
-[Gandiva cpp][2] must be built before this step. The cpp build directory must
-be provided as the value for argument gandiva.cpp.build.dir. eg.
+[Arrow Cpp][2] must be built before this step. The cpp build directory must
+be provided as the value for argument arrow.cpp.build.dir. eg.
 
 ```
 cd java
-mvn install -P gandiva -pl gandiva -am -Dgandiva.cpp.build.dir=../../debug
+mvn install -P arrow-jni -am -Darrow.cpp.build.dir=../../release
 ```
 
-This library is still in Alpha stages, and subject to API changes without
+The gandiva library is still in Alpha stages, and subject to API changes without
 deprecation warnings.
 
 ## Java Code Style Guide
@@ -64,17 +64,13 @@ Refer to `java/dev/checkstyle/checkstyle.xml for rule specifics.
 ## Test Logging Configuration
 
 When running tests, Arrow Java uses the Logback logger with SLF4J. By default,
-Logback has a log level set to DEBUG. Besides setting this level
-programmatically, it can also be configured with a file named either
-"logback.xml" or "logback-test.xml" residing in the classpath. The file
-location can also be specified in the Maven command line with the following
-option `-Dlogback.configurationFile=file:<absolute-file-path>`. A sample
-logback.xml file is available in `java/dev` with a log level of ERROR. Arrow
-Java can be built with this file using the following command run in the project
-root directory:
+it uses the logback.xml present in the corresponding module's src/test/resources
+directory, which has the default log level set to INFO.
+Arrow Java can be built with an alternate logback configuration file using the
+following command run in the project root directory:
 
 ```bash
-mvn -Dlogback.configurationFile=file:`pwd`/dev/logback.xml
+mvn -Dlogback.configurationFile=file:<path-of-logback-file>
 ```
 
 See [Logback Configuration][1] for more details.

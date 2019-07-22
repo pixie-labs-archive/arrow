@@ -27,7 +27,7 @@ import org.apache.arrow.flight.FlightClient;
 import org.apache.arrow.flight.FlightDescriptor;
 import org.apache.arrow.flight.FlightInfo;
 import org.apache.arrow.flight.FlightStream;
-import org.apache.arrow.flight.Location;
+import org.apache.arrow.flight.FlightTestUtil;
 import org.apache.arrow.flight.Ticket;
 import org.apache.arrow.flight.perf.impl.PerfOuterClass.Perf;
 import org.apache.arrow.memory.BufferAllocator;
@@ -60,7 +60,7 @@ public class TestPerf {
         Field.nullable("b", MinorType.BIGINT.getType()),
         Field.nullable("c", MinorType.BIGINT.getType()),
         Field.nullable("d", MinorType.BIGINT.getType())
-        ));
+    ));
 
     FlatBufferBuilder builder = new FlatBufferBuilder();
     pojoSchema.getSchema(builder);
@@ -77,15 +77,12 @@ public class TestPerf {
   @Test
   public void throughput() throws Exception {
     for (int i = 0; i < 10; i++) {
-      final Location l = new Location("localhost", 12233);
       try (
           final BufferAllocator a = new RootAllocator(Long.MAX_VALUE);
-          final PerformanceTestServer server = new PerformanceTestServer(a, l);
-          final FlightClient client = new FlightClient(a, l);
-          ) {
-
-        server.start();
-
+          final PerformanceTestServer server =
+              FlightTestUtil.getStartedServer((location) -> new PerformanceTestServer(a, location));
+          final FlightClient client = FlightClient.builder(a, server.getLocation()).build();
+      ) {
         final FlightInfo info = client.getInfo(getPerfFlightDescriptor(50_000_000L, 4095, 2));
         ListeningExecutorService pool = MoreExecutors.listeningDecorator(Executors.newFixedThreadPool(4));
         List<ListenableFuture<Result>> results = info.getEndpoints()
@@ -94,21 +91,23 @@ public class TestPerf {
             .map(t -> pool.submit(t))
             .collect(Collectors.toList());
 
-        Futures.whenAllSucceed(results);
-        Result r = new Result();
-        for (ListenableFuture<Result> f : results) {
-          r.add(f.get());
-        }
+        final Result r = Futures.whenAllSucceed(results).call(() -> {
+          Result res = new Result();
+          for (ListenableFuture<Result> f : results) {
+            res.add(f.get());
+          }
+          return res;
+        }).get();
 
         double seconds = r.nanos * 1.0d / 1000 / 1000 / 1000;
         System.out.println(String.format(
-            "Transferred %d records totaling %s bytes at %f mb/s. %f record/s. %f batch/s.",
+            "Transferred %d records totaling %s bytes at %f MiB/s. %f record/s. %f batch/s.",
             r.rows,
             r.bytes,
             (r.bytes * 1.0d / 1024 / 1024) / seconds,
             (r.rows * 1.0d) / seconds,
             (r.batches * 1.0d) / seconds
-            ));
+        ));
       }
     }
   }
@@ -128,28 +127,29 @@ public class TestPerf {
     public Result call() throws Exception {
       final Result r = new Result();
       Stopwatch watch = Stopwatch.createStarted();
-      FlightStream stream = client.getStream(ticket);
-      final VectorSchemaRoot root = stream.getRoot();
-      try {
-        BigIntVector a = (BigIntVector) root.getVector("a");
-        while (stream.next()) {
-          int rows = root.getRowCount();
-          long aSum = r.aSum;
-          for (int i = 0; i < rows; i++) {
-            if (VALIDATE) {
-              aSum += a.get(i);
+      try (final FlightStream stream = client.getStream(ticket)) {
+        final VectorSchemaRoot root = stream.getRoot();
+        try {
+          BigIntVector a = (BigIntVector) root.getVector("a");
+          while (stream.next()) {
+            int rows = root.getRowCount();
+            long aSum = r.aSum;
+            for (int i = 0; i < rows; i++) {
+              if (VALIDATE) {
+                aSum += a.get(i);
+              }
             }
+            r.bytes += rows * 32;
+            r.rows += rows;
+            r.aSum = aSum;
+            r.batches++;
           }
-          r.bytes += rows * 32;
-          r.rows += rows;
-          r.aSum = aSum;
-          r.batches++;
-        }
 
-        r.nanos = watch.elapsed(TimeUnit.NANOSECONDS);
-        return r;
-      } finally {
-        root.clear();
+          r.nanos = watch.elapsed(TimeUnit.NANOSECONDS);
+          return r;
+        } finally {
+          root.clear();
+        }
       }
     }
 

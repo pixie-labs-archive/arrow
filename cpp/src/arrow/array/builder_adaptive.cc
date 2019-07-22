@@ -86,16 +86,16 @@ Status AdaptiveIntBuilder::FinishInternal(std::shared_ptr<ArrayData>* out) {
       output_type = int64();
       break;
     default:
-      DCHECK(false);
       return Status::NotImplemented("Only ints of size 1,2,4,8 are supported");
   }
 
-  RETURN_NOT_OK(TrimBuffer(BitUtil::BytesForBits(length_), null_bitmap_.get()));
+  std::shared_ptr<Buffer> null_bitmap;
+  RETURN_NOT_OK(null_bitmap_builder_.Finish(&null_bitmap));
   RETURN_NOT_OK(TrimBuffer(length_ * int_size_, data_.get()));
 
-  *out = ArrayData::Make(output_type, length_, {null_bitmap_, data_}, null_count_);
+  *out = ArrayData::Make(output_type, length_, {null_bitmap, data_}, null_count_);
 
-  data_ = null_bitmap_ = nullptr;
+  data_ = nullptr;
   capacity_ = length_ = null_count_ = 0;
   return Status::OK();
 }
@@ -271,16 +271,16 @@ Status AdaptiveUIntBuilder::FinishInternal(std::shared_ptr<ArrayData>* out) {
       output_type = uint64();
       break;
     default:
-      DCHECK(false);
       return Status::NotImplemented("Only ints of size 1,2,4,8 are supported");
   }
 
-  RETURN_NOT_OK(TrimBuffer(BitUtil::BytesForBits(length_), null_bitmap_.get()));
+  std::shared_ptr<Buffer> null_bitmap;
+  RETURN_NOT_OK(null_bitmap_builder_.Finish(&null_bitmap));
   RETURN_NOT_OK(TrimBuffer(length_ * int_size_, data_.get()));
 
-  *out = ArrayData::Make(output_type, length_, {null_bitmap_, data_}, null_count_);
+  *out = ArrayData::Make(output_type, length_, {null_bitmap, data_}, null_count_);
 
-  data_ = null_bitmap_ = nullptr;
+  data_ = nullptr;
   capacity_ = length_ = null_count_ = 0;
   return Status::OK();
 }

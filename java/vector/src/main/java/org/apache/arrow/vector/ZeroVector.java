@@ -37,6 +37,9 @@ import org.apache.arrow.vector.util.TransferPair;
 
 import io.netty.buffer.ArrowBuf;
 
+/**
+ * A zero length vector of any type.
+ */
 public class ZeroVector implements FieldVector {
   public static final ZeroVector INSTANCE = new ZeroVector();
 
@@ -239,6 +242,16 @@ public class ZeroVector implements FieldVector {
 
   @Override
   public boolean isNull(int index) {
+    return false;
+  }
+
+  @Override
+  public int hashCode(int index) {
+    return 0;
+  }
+
+  @Override
+  public boolean equals(int index, ValueVector to, int toIndex) {
     return false;
   }
 }

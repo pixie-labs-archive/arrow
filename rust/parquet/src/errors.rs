@@ -19,6 +19,7 @@
 
 use std::{cell, convert, io, result};
 
+use arrow::error::ArrowError;
 use quick_error::quick_error;
 use snap;
 use thrift;
@@ -49,6 +50,17 @@ quick_error! {
       EOF(message: String) {
           display("EOF: {}", message)
               description(message)
+      }
+      /// Arrow error.
+      /// Returned when reading into arrow or writing from arrow.
+      ArrowError(message:  String) {
+          display("Arrow: {}", message)
+              description(message)
+              from(e: ArrowError) -> (format!("underlying Arrow error: {:?}", e))
+      }
+      IndexOutOfBound(index: usize, bound: usize) {
+          display("Index {} out of bound: {}", index, bound)
+              description("Index out of bound error")
       }
   }
 }

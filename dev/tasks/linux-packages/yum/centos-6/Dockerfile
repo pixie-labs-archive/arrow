@@ -45,17 +45,21 @@ RUN \
   yum install -y ${quiet} \
     centos-release-scl && \
   yum install -y ${quiet} \
-    boost-devel \
     cmake3 \
     devtoolset-6 \
+    gflags-devel \
     git \
     gobject-introspection-devel \
     gtk-doc \
+    libzstd-devel \
+    lz4-devel \
     pkg-config \
     python34 \
     python34-devel \
     python34-numpy \
     rpm-build \
     rpmdevtools \
-    tar && \
+    snappy-devel \
+    tar \
+    zlib-devel && \
   yum clean ${quiet} all

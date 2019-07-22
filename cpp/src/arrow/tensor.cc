@@ -23,13 +23,16 @@
 #include <memory>
 #include <numeric>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "arrow/compare.h"
+#include "arrow/status.h"
 #include "arrow/type.h"
 #include "arrow/type_traits.h"
 #include "arrow/util/checked_cast.h"
 #include "arrow/util/logging.h"
+#include "arrow/visitor_inline.h"
 
 namespace arrow {
 
@@ -75,7 +78,7 @@ Tensor::Tensor(const std::shared_ptr<DataType>& type, const std::shared_ptr<Buff
                const std::vector<int64_t>& shape, const std::vector<int64_t>& strides,
                const std::vector<std::string>& dim_names)
     : type_(type), data_(data), shape_(shape), strides_(strides), dim_names_(dim_names) {
-  DCHECK(is_tensor_supported(type->id()));
+  ARROW_CHECK(is_tensor_supported(type->id()));
   if (shape.size() > 0 && strides.size() == 0) {
     ComputeRowMajorStrides(checked_cast<const FixedWidthType&>(*type_), shape, &strides_);
   }
@@ -94,7 +97,7 @@ const std::string& Tensor::dim_name(int i) const {
   if (dim_names_.size() == 0) {
     return kEmpty;
   } else {
-    DCHECK_LT(i, static_cast<int>(dim_names_.size()));
+    ARROW_CHECK_LT(i, static_cast<int>(dim_names_.size()));
     return dim_names_[i];
   }
 }
@@ -123,50 +126,72 @@ Type::type Tensor::type_id() const { return type_->id(); }
 
 bool Tensor::Equals(const Tensor& other) const { return TensorEquals(*this, other); }
 
-// ----------------------------------------------------------------------
-// NumericTensor
+namespace {
 
 template <typename TYPE>
-NumericTensor<TYPE>::NumericTensor(const std::shared_ptr<Buffer>& data,
-                                   const std::vector<int64_t>& shape)
-    : NumericTensor(data, shape, {}, {}) {}
-
-template <typename TYPE>
-NumericTensor<TYPE>::NumericTensor(const std::shared_ptr<Buffer>& data,
-                                   const std::vector<int64_t>& shape,
-                                   const std::vector<int64_t>& strides)
-    : NumericTensor(data, shape, strides, {}) {}
-
-template <typename TYPE>
-NumericTensor<TYPE>::NumericTensor(const std::shared_ptr<Buffer>& data,
-                                   const std::vector<int64_t>& shape,
-                                   const std::vector<int64_t>& strides,
-                                   const std::vector<std::string>& dim_names)
-    : Tensor(TypeTraits<TYPE>::type_singleton(), data, shape, strides, dim_names) {}
-
-template <typename TYPE>
-int64_t NumericTensor<TYPE>::CalculateValueOffset(
-    const std::vector<int64_t>& index) const {
-  int64_t offset = 0;
-  for (size_t i = 0; i < index.size(); ++i) {
-    offset += index[i] * strides_[i];
+int64_t StridedTensorCountNonZero(int dim_index, int64_t offset, const Tensor& tensor) {
+  using c_type = typename TYPE::c_type;
+  c_type const zero = c_type(0);
+  int64_t nnz = 0;
+  if (dim_index == tensor.ndim() - 1) {
+    for (int64_t i = 0; i < tensor.shape()[dim_index]; ++i) {
+      auto const* ptr = tensor.raw_data() + offset + i * tensor.strides()[dim_index];
+      auto& elem = *reinterpret_cast<c_type const*>(ptr);
+      if (elem != zero) ++nnz;
+    }
+    return nnz;
   }
-  return offset;
+  for (int64_t i = 0; i < tensor.shape()[dim_index]; ++i) {
+    nnz += StridedTensorCountNonZero<TYPE>(dim_index + 1, offset, tensor);
+    offset += tensor.strides()[dim_index];
+  }
+  return nnz;
 }
 
-// ----------------------------------------------------------------------
-// Instantiate templates
+template <typename TYPE>
+int64_t ContiguousTensorCountNonZero(const Tensor& tensor) {
+  using c_type = typename TYPE::c_type;
+  auto* data = reinterpret_cast<c_type const*>(tensor.raw_data());
+  return std::count_if(data, data + tensor.size(),
+                       [](c_type const& x) { return x != 0; });
+}
 
-template class ARROW_TEMPLATE_EXPORT NumericTensor<UInt8Type>;
-template class ARROW_TEMPLATE_EXPORT NumericTensor<UInt16Type>;
-template class ARROW_TEMPLATE_EXPORT NumericTensor<UInt32Type>;
-template class ARROW_TEMPLATE_EXPORT NumericTensor<UInt64Type>;
-template class ARROW_TEMPLATE_EXPORT NumericTensor<Int8Type>;
-template class ARROW_TEMPLATE_EXPORT NumericTensor<Int16Type>;
-template class ARROW_TEMPLATE_EXPORT NumericTensor<Int32Type>;
-template class ARROW_TEMPLATE_EXPORT NumericTensor<Int64Type>;
-template class ARROW_TEMPLATE_EXPORT NumericTensor<HalfFloatType>;
-template class ARROW_TEMPLATE_EXPORT NumericTensor<FloatType>;
-template class ARROW_TEMPLATE_EXPORT NumericTensor<DoubleType>;
+template <typename TYPE>
+inline int64_t TensorCountNonZero(const Tensor& tensor) {
+  if (tensor.is_contiguous()) {
+    return ContiguousTensorCountNonZero<TYPE>(tensor);
+  } else {
+    return StridedTensorCountNonZero<TYPE>(0, 0, tensor);
+  }
+}
+
+struct NonZeroCounter {
+  NonZeroCounter(const Tensor& tensor, int64_t* result)
+      : tensor_(tensor), result_(result) {}
+
+  template <typename TYPE>
+  typename std::enable_if<!is_number_type<TYPE>::value, Status>::type Visit(
+      const TYPE& type) {
+    ARROW_CHECK(!is_tensor_supported(type.id()));
+    return Status::NotImplemented("Tensor of ", type.ToString(), " is not implemented");
+  }
+
+  template <typename TYPE>
+  typename std::enable_if<is_number_type<TYPE>::value, Status>::type Visit(
+      const TYPE& type) {
+    *result_ = TensorCountNonZero<TYPE>(tensor_);
+    return Status::OK();
+  }
+
+  const Tensor& tensor_;
+  int64_t* result_;
+};
+
+}  // namespace
+
+Status Tensor::CountNonZero(int64_t* result) const {
+  NonZeroCounter counter(*this, result);
+  return VisitTypeInline(*type(), &counter);
+}
 
 }  // namespace arrow

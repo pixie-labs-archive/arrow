@@ -29,29 +29,16 @@
 
 namespace gandiva {
 
-using arrow::binary;
-using arrow::boolean;
-using arrow::date64;
-using arrow::float32;
-using arrow::float64;
-using arrow::int16;
-using arrow::int32;
-using arrow::int64;
-using arrow::int8;
-using arrow::uint16;
-using arrow::uint32;
-using arrow::uint64;
-using arrow::uint8;
-using arrow::utf8;
-using std::iterator;
-using std::vector;
-
 FunctionRegistry::iterator FunctionRegistry::begin() const {
   return &(*pc_registry_.begin());
 }
 
 FunctionRegistry::iterator FunctionRegistry::end() const {
   return &(*pc_registry_.end());
+}
+
+FunctionRegistry::iterator FunctionRegistry::back() const {
+  return &(pc_registry_.back());
 }
 
 std::vector<NativeFunction> FunctionRegistry::pc_registry_;
@@ -63,7 +50,6 @@ SignatureMap FunctionRegistry::InitPCMap() {
 
   auto v1 = GetArithmeticFunctionRegistry();
   pc_registry_.insert(std::end(pc_registry_), v1.begin(), v1.end());
-
   auto v2 = GetDateTimeFunctionRegistry();
   pc_registry_.insert(std::end(pc_registry_), v2.begin(), v2.end());
 
@@ -80,7 +66,9 @@ SignatureMap FunctionRegistry::InitPCMap() {
   pc_registry_.insert(std::end(pc_registry_), v6.begin(), v6.end());
 
   for (auto& elem : pc_registry_) {
-    map.insert(std::make_pair(&(elem.signature()), &elem));
+    for (auto& func_signature : elem.signatures()) {
+      map.insert(std::make_pair(&(func_signature), &elem));
+    }
   }
 
   return map;
@@ -89,7 +77,7 @@ SignatureMap FunctionRegistry::InitPCMap() {
 const NativeFunction* FunctionRegistry::LookupSignature(
     const FunctionSignature& signature) const {
   auto got = pc_registry_map_.find(&signature);
-  return got == pc_registry_map_.end() ? NULL : got->second;
+  return got == pc_registry_map_.end() ? nullptr : got->second;
 }
 
 }  // namespace gandiva

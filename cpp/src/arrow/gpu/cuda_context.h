@@ -119,6 +119,26 @@ class ARROW_EXPORT CudaContext : public std::enable_shared_from_this<CudaContext
   /// \brief Return device number
   int device_number() const;
 
+  /// \brief Return the device address that is reachable from kernels
+  /// running in the context
+  /// \param[in] addr device or host memory address
+  /// \param[out] devaddr the device address
+  /// \return Status
+  ///
+  /// The device address is defined as a memory address accessible by
+  /// device. While it is often a device memory address, it can be
+  /// also a host memory address, for instance, when the memory is
+  /// allocated as host memory (using cudaMallocHost or cudaHostAlloc)
+  /// or as managed memory (using cudaMallocManaged) or the host
+  /// memory is page-locked (using cudaHostRegister).
+  Status GetDeviceAddress(uint8_t* addr, uint8_t** devaddr);
+
+  /// \brief Release CUDA memory on GPU device for this context
+  /// \param[in] device_ptr the buffer address
+  /// \param[in] nbytes number of bytes
+  /// \return Status
+  Status Free(void* device_ptr, int64_t nbytes);
+
  private:
   CudaContext();
 
@@ -127,7 +147,8 @@ class ARROW_EXPORT CudaContext : public std::enable_shared_from_this<CudaContext
   Status CopyHostToDevice(void* dst, const void* src, int64_t nbytes);
   Status CopyDeviceToHost(void* dst, const void* src, int64_t nbytes);
   Status CopyDeviceToDevice(void* dst, const void* src, int64_t nbytes);
-  Status Free(void* device_ptr, int64_t nbytes);
+  Status CopyDeviceToAnotherDevice(const std::shared_ptr<CudaContext>& dst_ctx, void* dst,
+                                   const void* src, int64_t nbytes);
 
   class CudaContextImpl;
   std::unique_ptr<CudaContextImpl> impl_;
@@ -135,7 +156,10 @@ class ARROW_EXPORT CudaContext : public std::enable_shared_from_this<CudaContext
   friend CudaBuffer;
   friend CudaBufferReader;
   friend CudaBufferWriter;
+  /// \cond FALSE
+  // (note: emits warning on Doxygen < 1.8.15)
   friend CudaDeviceManager::CudaDeviceManagerImpl;
+  /// \endcond
 };
 
 }  // namespace cuda

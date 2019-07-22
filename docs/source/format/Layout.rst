@@ -64,9 +64,11 @@ Base requirements
   data
 * It is required to have all the contiguous memory buffers in an IPC payload
   aligned at 8-byte boundaries. In other words, each buffer must start at
-  an aligned 8-byte offset.
-* The general recommendation is to align the buffers at 64-byte boundary, but
-  this is not absolutely necessary.
+  an aligned 8-byte offset. Additionally, each buffer should be padded to a multiple
+  of 8 bytes.
+* For performance reasons it **preferred/recommended** to align buffers to a 
+  64-byte boundary and pad to a multiple of 64 bytes, but this is not absolutely 
+  necessary.  The rationale is discussed in more details below.
 * Any relative type can have null slots
 * Arrays are immutable once created. Implementations can provide APIs to mutate
   an array, but applying mutations will require a new array data structure to
@@ -122,14 +124,16 @@ practices for optimized memory access:
 
 * Elements in numeric arrays will be guaranteed to be retrieved via aligned access.
 * On some architectures alignment can help limit partially used cache lines.
-* 64 byte alignment is recommended by the `Intel performance guide`_ for
-  data-structures over 64 bytes (which will be a common case for Arrow Arrays).
 
-Recommending padding to a multiple of 64 bytes allows for using `SIMD`_ instructions
+The recommendation for 64 byte alignment comes from the `Intel performance guide`_
+that recommends alignment of memory to match SIMD register width.
+The specific padding length was chosen because it matches the largest known
+SIMD instruction registers available as of April 2016 (Intel AVX-512).
+
+The recommended padding of 64 bytes allows for using `SIMD`_ instructions
 consistently in loops without additional conditional checks.
 This should allow for simpler, efficient and CPU cache-friendly code.
-The specific padding length was chosen because it matches the largest known
-SIMD instruction registers available as of April 2016 (Intel AVX-512). In other
+In other
 words, we can load the entire 64-byte buffer into a 512-bit wide SIMD register
 and get data-level parallelism on all the columnar values packed into the 64-byte
 buffer. Guaranteed padding can also allow certain compilers
@@ -162,9 +166,8 @@ Null bitmaps
 Any relative type can have null value slots, whether primitive or nested type.
 
 An array with nulls must have a contiguous memory buffer, known as the null (or
-validity) bitmap, whose length is a multiple of 64 bytes (as discussed above)
-and large enough to have at least 1 bit for each array
-slot.
+validity) bitmap, whose length is a multiple of 8 bytes (64 bytes recommended)
+and large enough to have at least 1 bit for each array slot.
 
 Whether any array slot is valid (non-null) is encoded in the respective bits of
 this bitmap. A 1 (set bit) for index ``j`` indicates that the value is not null,
@@ -321,7 +324,7 @@ Example Layout: ``List<List<byte>>``
 
 ``[[[1, 2], [3, 4]], [[5, 6, 7], null, [8]], [[9, 10]]]``
 
-will be be represented as follows: ::
+will be represented as follows: ::
 
     * Length 3
     * Nulls count: 0
@@ -353,6 +356,51 @@ will be be represented as follows: ::
           | Bytes 0-9                     | Bytes 10-63 |
           |-------------------------------|-------------|
           | 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 | unspecified |
+
+Note that while the inner offsets buffer encodes the start position in the inner values array, the outer offsets buffer encodes the start position of corresponding outer element in the inner offsets buffer.
+
+Fixed Size List type
+--------------------
+
+Fixed Size List is a nested type in which each array slot contains a fixed-size
+sequence of values all having the same relative type (heterogeneity can be
+achieved through unions, described later).
+
+A fixed size list type is specified like ``FixedSizeList<T>[N]``, where ``T`` is
+any relative type (primitive or nested) and ``N`` is a 32-bit signed integer
+representing the length of the lists.
+
+A fixed size list array is represented by a values array, which is a child array of
+type T. T may also be a nested type. The value in slot ``j`` of a fixed size list
+array is stored in an ``N``-long slice of the values array, starting at an offset of
+``j * N``.
+
+Example Layout: ``FixedSizeList<byte>[4]`` Array
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Let's consider an example, the type ``FixedSizeList<byte>[4]``.
+
+For an array of length 4 with respective values: ::
+
+    [[192, 168, 0, 12], null, [192, 168, 0, 25], [192, 168, 0, 1]]
+
+will have the following representation: ::
+
+    * Length: 4, Null count: 1
+    * Null bitmap buffer:
+
+      | Byte 0 (validity bitmap) | Bytes 1-63            |
+      |--------------------------|-----------------------|
+      | 00001101                 | 0 (padding)           |
+
+    * Values array (byte array):
+      * Length: 16,  Null count: 0
+      * Null bitmap buffer: Not required
+
+        | Bytes 0-3       | Bytes 4-7   | Bytes 8-15                      |
+        |-----------------|-------------|---------------------------------|
+        | 192, 168, 0, 12 | unspecified | 192, 168, 0, 25, 192, 168, 0, 1 |
+
 
 Struct type
 -----------
@@ -442,6 +490,91 @@ This is illustrated in the example above, the child arrays have valid entries
 for the null struct but are 'hidden' from the consumer by the parent array's
 null bitmap.  However, when treated independently corresponding
 values of the children array will be non-null.
+
+
+Map type
+--------
+
+Map is a nested type in which each array slot contains a variable size sequence
+of key-item pairs.
+
+A map type is specified like ``Map<K, I>``, where ``K`` and ``I`` are
+any relative type (primitive or nested) and represent the key and item types
+respectively.
+
+A map array is represented by the combination of the following:
+
+* A child array (of type ``Struct<K, I>``) containing key item pairs. This has
+  child arrays:
+  * A keys array of type ``K``. This array may not contain nulls.
+  * An items array of type ``I``.
+* An offsets buffer containing 32-bit signed integers with length equal to the
+  length of the top-level array plus one. Note that this limits the size of the
+  child arrays to 2 :sup:`31` -1.
+
+The offsets array encodes a start position in the child arrays, and the length
+of the map in each slot is computed using the first difference with the next
+element in the offsets array. (Equivalent offsets layout to ``List<T>``).
+Each slice of the child arrays delimited by the offsets array represent a set
+of key item pairs in the corresponding slot of the parent map array.
+
+Example Layout: ``Map<K, I>`` Array
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Let's consider an example, the type ``Map<String, Int32>``.
+
+For an array of length 4 with respective values: ::
+
+    [{'joe': 0}, null, {'mark': null, 'cap': 8}, {}]
+
+will have the following representation: ::
+
+    * Length: 4, Null count: 1
+    * Null bitmap buffer:
+
+      | Byte 0 (validity bitmap) | Bytes 1-63            |
+      |--------------------------|-----------------------|
+      | 00001101                 | 0 (padding)           |
+
+    * Offsets buffer (int32):
+
+      | Bytes 0-19     |
+      |----------------|
+      | 0, 1, 1, 3, 3  |
+
+    * 'pairs' array (`Struct<String, Int32>`):
+      * Length: 3, Null count: 0
+      * Null bitmap buffer: Not required
+
+      * 'keys' array (`String`):
+        * Length: 3, Null count: 0
+        * Null bitmap buffer: Not required
+        * Offsets buffer (int32):
+
+          | Bytes 0-15   |
+          |--------------|
+          | 0, 3, 7, 10  |
+
+         * Values buffer:
+
+          | Bytes 0-10     |
+          |----------------|
+          | joemarkcap     |
+
+      * 'items' array (`Int32`):
+        * Length: 3, Null count: 1
+        * Null bitmap buffer:
+
+          | Byte 0 (validity bitmap) | Bytes 1-63            |
+          |--------------------------|-----------------------|
+          | 00000101                 | 0 (padding)           |
+
+        * Value Buffer (int32):
+
+          | Bytes 0-3   | Bytes 4-7   | Bytes 8-11  |
+          |-------------|-------------|-------------|
+          |  0          | unspecified |  8          |
+
 
 Dense union type
 ----------------
@@ -595,7 +728,7 @@ will have the following layout: ::
           * Length: 7,  Null count: 0
           * Null bitmap buffer: Not required
 
-            | Bytes 0-7  | Bytes 8-63            |
+            | Bytes 0-6  | Bytes 7-63            |
             |------------|-----------------------|
             | joemark    | unspecified (padding) |
 
@@ -614,13 +747,13 @@ Dictionary encoding
 -------------------
 
 When a field is dictionary encoded, the values are represented by an array of
-Int32 representing the index of the value in the dictionary.  The Dictionary is
-received as one or more DictionaryBatches with the id referenced by a
-dictionary attribute defined in the metadata (Message.fbs) in the Field
-table.  The dictionary has the same layout as the type of the field would
-dictate. Each entry in the dictionary can be accessed by its index in the
-DictionaryBatches.  When a Schema references a Dictionary id, it must send at
-least one DictionaryBatch for this id.
+signed integers representing the index of the value in the dictionary.
+The Dictionary is received as one or more DictionaryBatches with the id
+referenced by a dictionary attribute defined in the metadata (Message.fbs)
+in the Field table.  The dictionary has the same layout as the type of the
+field would dictate. Each entry in the dictionary can be accessed by its
+index in the DictionaryBatches.  When a Schema references a Dictionary id,
+it must send at least one DictionaryBatch for this id.
 
 As an example, you could have the following data: ::
 
@@ -640,16 +773,17 @@ As an example, you could have the following data: ::
 In dictionary-encoded form, this could appear as: ::
 
     data List<String> (dictionary-encoded, dictionary id i)
-    indices: [0, 0, 0, 1, 1, 1, 0]
+       type: Int32
+       values:
+       [0, 0, 0, 1, 1, 1, 0]
 
     dictionary i
-
-    type: List<String>
-
-    [
-     ['a', 'b'],
-     ['c', 'd', 'e'],
-    ]
+       type: List<String>
+       values:
+       [
+        ['a', 'b'],
+        ['c', 'd', 'e'],
+       ]
 
 References
 ----------

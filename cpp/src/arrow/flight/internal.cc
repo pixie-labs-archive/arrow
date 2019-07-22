@@ -16,22 +16,33 @@
 // under the License.
 
 #include "arrow/flight/internal.h"
+#include "arrow/flight/platform.h"
+#include "arrow/flight/protocol-internal.h"
 
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <utility>
 
+#ifdef GRPCPP_PP_INCLUDE
 #include <grpcpp/grpcpp.h>
+#else
+#include <grpc++/grpc++.h>
+#endif
 
+#include "arrow/buffer.h"
 #include "arrow/io/memory.h"
 #include "arrow/ipc/reader.h"
 #include "arrow/ipc/writer.h"
+#include "arrow/memory_pool.h"
 #include "arrow/status.h"
 #include "arrow/util/logging.h"
 
 namespace arrow {
 namespace flight {
 namespace internal {
+
+const char* kGrpcAuthHeader = "auth-token-bin";
 
 Status FromGrpcStatus(const grpc::Status& grpc_status) {
   if (grpc_status.ok()) {
@@ -110,14 +121,11 @@ Status FromProto(const pb::Criteria& pb_criteria, Criteria* criteria) {
 // Location
 
 Status FromProto(const pb::Location& pb_location, Location* location) {
-  location->host = pb_location.host();
-  location->port = pb_location.port();
-  return Status::OK();
+  return Location::Parse(pb_location.uri(), location);
 }
 
 void ToProto(const Location& location, pb::Location* pb_location) {
-  pb_location->set_host(location.host);
-  pb_location->set_port(location.port);
+  pb_location->set_uri(location.ToString());
 }
 
 // Ticket
@@ -129,6 +137,21 @@ Status FromProto(const pb::Ticket& pb_ticket, Ticket* ticket) {
 
 void ToProto(const Ticket& ticket, pb::Ticket* pb_ticket) {
   pb_ticket->set_ticket(ticket.ticket);
+}
+
+// FlightData
+
+Status FromProto(const pb::FlightData& pb_data, FlightDescriptor* descriptor,
+                 std::unique_ptr<ipc::Message>* message) {
+  RETURN_NOT_OK(internal::FromProto(pb_data.flight_descriptor(), descriptor));
+  const std::string& header = pb_data.data_header();
+  const std::string& body = pb_data.data_body();
+  std::shared_ptr<Buffer> header_buf = Buffer::Wrap(header.data(), header.size());
+  std::shared_ptr<Buffer> body_buf = Buffer::Wrap(body.data(), body.size());
+  if (header_buf == nullptr || body_buf == nullptr) {
+    return Status::UnknownError("Could not create buffers from protobuf");
+  }
+  return ipc::Message::Open(header_buf, body_buf, message);
 }
 
 // FlightEndpoint
@@ -156,7 +179,7 @@ Status FromProto(const pb::FlightDescriptor& pb_descriptor,
                  FlightDescriptor* descriptor) {
   if (pb_descriptor.type() == pb::FlightDescriptor::PATH) {
     descriptor->type = FlightDescriptor::PATH;
-    descriptor->path.resize(pb_descriptor.path_size());
+    descriptor->path.reserve(pb_descriptor.path_size());
     for (int i = 0; i < pb_descriptor.path_size(); ++i) {
       descriptor->path.emplace_back(pb_descriptor.path(i));
     }
@@ -182,9 +205,9 @@ Status ToProto(const FlightDescriptor& descriptor, pb::FlightDescriptor* pb_desc
   return Status::OK();
 }
 
-// FlightGetInfo
+// FlightInfo
 
-Status FromProto(const pb::FlightGetInfo& pb_info, FlightInfo::Data* info) {
+Status FromProto(const pb::FlightInfo& pb_info, FlightInfo::Data* info) {
   RETURN_NOT_OK(FromProto(pb_info.flight_descriptor(), &info->descriptor));
 
   info->schema = pb_info.schema();
@@ -202,13 +225,15 @@ Status FromProto(const pb::FlightGetInfo& pb_info, FlightInfo::Data* info) {
 Status SchemaToString(const Schema& schema, std::string* out) {
   // TODO(wesm): Do we care about better memory efficiency here?
   std::shared_ptr<Buffer> serialized_schema;
-  RETURN_NOT_OK(ipc::SerializeSchema(schema, default_memory_pool(), &serialized_schema));
+  ipc::DictionaryMemo unused_dict_memo;
+  RETURN_NOT_OK(ipc::SerializeSchema(schema, &unused_dict_memo, default_memory_pool(),
+                                     &serialized_schema));
   *out = std::string(reinterpret_cast<const char*>(serialized_schema->data()),
                      static_cast<size_t>(serialized_schema->size()));
   return Status::OK();
 }
 
-Status ToProto(const FlightInfo& info, pb::FlightGetInfo* pb_info) {
+Status ToProto(const FlightInfo& info, pb::FlightInfo* pb_info) {
   // clear any repeated fields
   pb_info->clear_endpoint();
 

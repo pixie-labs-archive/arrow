@@ -18,25 +18,25 @@
 ///! Many builders are available to easily create different types of arrow arrays
 extern crate arrow;
 
-use arrow::builder::{ArrayBuilder, Int32Builder};
+use arrow::array::Int32Builder;
 
 fn main() {
     // Primitive Arrays
     //
-    // Primitive arrays are arrays of fixed-width primitive types (bool, u8, u16, u32, u64, i8, i16,
-    // i32, i64, f32, f64)
+    // Primitive arrays are arrays of fixed-width primitive types (bool, u8, u16, u32,
+    // u64, i8, i16, i32, i64, f32, f64)
 
     // Create a new builder with a capacity of 100
     let mut primitive_array_builder = Int32Builder::new(100);
 
-    // Push an individual primitive value
-    primitive_array_builder.push(55).unwrap();
+    // Append an individual primitive value
+    primitive_array_builder.append_value(55).unwrap();
 
-    // Push a null value
-    primitive_array_builder.push_null().unwrap();
+    // Append a null value
+    primitive_array_builder.append_null().unwrap();
 
-    // Push a slice of primitive values
-    primitive_array_builder.push_slice(&[39, 89, 12]).unwrap();
+    // Append a slice of primitive values
+    primitive_array_builder.append_slice(&[39, 89, 12]).unwrap();
 
     // Build the `PrimitiveArray`
     let _primitive_array = primitive_array_builder.finish();

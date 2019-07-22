@@ -17,70 +17,136 @@ using Apache.Arrow.Memory;
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 
 namespace Apache.Arrow
 {
-    public partial class ArrowBuffer
+    public partial struct ArrowBuffer
     {
-        /// <summary>
-        /// Builds an Arrow buffer from primitive values.
-        /// </summary>
-        /// <typeparam name="T">Primitive type</typeparam>
         public class Builder<T>
             where T : struct
         {
+            private const int DefaultCapacity = 8;
+
             private readonly int _size;
-            private readonly MemoryPool _pool;
-            private Memory<byte> _memory;
-            private int _offset;
 
-            public Builder(int initialCapacity = 8, MemoryPool pool = default)
+            public int Capacity => Memory.Length / _size;
+            public int Length { get; private set; }
+            public Memory<byte> Memory { get; private set; }
+            public Span<T> Span
             {
-                if (initialCapacity <= 0) initialCapacity = 1;
-                if (pool == null) pool = DefaultMemoryPool.Instance.Value;
+                [MethodImpl(MethodImplOptions.AggressiveInlining)]
+                get => Memory.Span.CastTo<T>();
+            }
 
+            public Builder(int capacity = DefaultCapacity)
+            {
                 _size = Unsafe.SizeOf<T>();
-                _pool = pool;
-                _memory = _pool.Allocate(initialCapacity * _size);
+
+                Memory = new byte[capacity * _size];
+                Length = 0;
+            }
+
+            public Builder<T> Append(ArrowBuffer buffer)
+            {
+                Append(buffer.Span.CastTo<T>());
+                return this;
             }
 
             public Builder<T> Append(T value)
             {
-                var span = GetSpan();
-
-                if (_offset + 1 >= span.Length)
-                {
-                    // TODO: Consider a specifiable growth strategy
-
-                    _memory = _pool.Reallocate(_memory, (_memory.Length * 3) / 2);
-                }
-
-                span[_offset++] = value;
+                EnsureCapacity(1);
+                Span[Length++] = value;
                 return this;
             }
 
-            public Builder<T> Set(int index, T value)
+            public Builder<T> Append(ReadOnlySpan<T> source)
             {
-                var span = GetSpan();
-                span[index] = value;
+                EnsureCapacity(source.Length);
+                source.CopyTo(Span.Slice(Length, source.Length));
+                Length += source.Length;
+                return this;
+            }
+
+            public Builder<T> AppendRange(IEnumerable<T> values)
+            {
+                if (values != null)
+                {
+                    foreach (var v in values)
+                    {
+                        Append(v);
+                    }
+                }
+
+                return this;
+            }
+
+            public Builder<T> Reserve(int capacity)
+            {
+                EnsureCapacity(capacity);
+                return this;
+            }
+
+            public Builder<T> Resize(int capacity)
+            {
+                EnsureCapacity(capacity);
+                Length = Math.Max(0, capacity);
+
                 return this;
             }
 
             public Builder<T> Clear()
             {
-                var span = GetSpan();
-                span.Fill(default);
+                Span.Fill(default);
+                Length = 0;
                 return this;
             }
 
-            public ArrowBuffer Build()
+            public ArrowBuffer Build(MemoryAllocator allocator = default)
             {
-                return new ArrowBuffer(_memory, _offset);
+                int currentBytesLength = Length * _size;
+                int bufferLength = checked((int)BitUtility.RoundUpToMultipleOf64(currentBytesLength));
+
+                var memoryAllocator = allocator ?? MemoryAllocator.Default.Value;
+                var memoryOwner = memoryAllocator.Allocate(bufferLength);
+
+                if (memoryOwner != null)
+                {
+                    Memory.Slice(0, currentBytesLength).CopyTo(memoryOwner.Memory);
+                }
+
+                return new ArrowBuffer(memoryOwner);
             }
 
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            private Span<T> GetSpan() => MemoryMarshal.Cast<byte, T>(_memory.Span);
+            private void EnsureCapacity(int n)
+            {
+                var length = checked(Length + n);
+
+                if (length > Capacity)
+                {
+                    // TODO: specifiable growth strategy
+
+                    var capacity = Math.Max(length * _size, Memory.Length * 2);
+                    Reallocate(capacity);
+                }
+            }
+
+            private void Reallocate(int length)
+            {
+                if (length < 0)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(length));
+                }
+
+                if (length != 0)
+                {
+                    var memory = new Memory<byte>(new byte[length]);
+                    Memory.CopyTo(memory);
+
+                    Memory = memory;
+                }
+            }
+
         }
+
     }
 }

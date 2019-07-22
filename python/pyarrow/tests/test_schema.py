@@ -20,7 +20,6 @@ import pickle
 
 import pytest
 import numpy as np
-
 import pyarrow as pa
 
 
@@ -266,6 +265,30 @@ baz: list<item: int8>
         pa.schema(fields)
 
 
+def test_schema_duplicate_fields():
+    fields = [
+        pa.field('foo', pa.int32()),
+        pa.field('bar', pa.string()),
+        pa.field('foo', pa.list_(pa.int8())),
+    ]
+    sch = pa.schema(fields)
+    assert sch.names == ['foo', 'bar', 'foo']
+    assert sch.types == [pa.int32(), pa.string(), pa.list_(pa.int8())]
+    assert len(sch) == 3
+    assert repr(sch) == """\
+foo: int32
+bar: string
+foo: list<item: int8>
+  child 0, item: int8"""
+
+    assert sch[0].name == 'foo'
+    assert sch[0].type == fields[0].type
+    assert sch.field_by_name('bar') == fields[1]
+    assert sch.field_by_name('xxx') is None
+    with pytest.warns(UserWarning):
+        assert sch.field_by_name('foo') is None
+
+
 def test_field_flatten():
     f0 = pa.field('foo', pa.int32()).add_metadata({b'foo': b'bar'})
     assert f0.flatten() == [f0]
@@ -348,6 +371,15 @@ def test_schema_equals_propagates_check_metadata():
     assert schema1.equals(schema2, check_metadata=False)
 
 
+def test_schema_equals_invalid_type():
+    # ARROW-5873
+    schema = pa.schema([pa.field("a", pa.int64())])
+
+    for val in [None, 'string', pa.array([1, 2])]:
+        with pytest.raises(TypeError):
+            schema.equals(val)
+
+
 def test_schema_equality_operators():
     fields = [
         pa.field('foo', pa.int32()),
@@ -392,9 +424,8 @@ def test_schema_negative_indexing():
 
 
 def test_schema_repr_with_dictionaries():
-    dct = pa.array(['foo', 'bar', 'baz'], type=pa.string())
     fields = [
-        pa.field('one', pa.dictionary(pa.int16(), dct)),
+        pa.field('one', pa.dictionary(pa.int16(), pa.string())),
         pa.field('two', pa.int32())
     ]
     sch = pa.schema(fields)
@@ -402,12 +433,6 @@ def test_schema_repr_with_dictionaries():
     expected = (
         """\
 one: dictionary<values=string, indices=int16, ordered=0>
-  dictionary:
-    [
-      "foo",
-      "bar",
-      "baz"
-    ]
 two: int32""")
 
     assert repr(sch) == expected
@@ -456,3 +481,33 @@ def test_type_schema_pickling():
     schema = pa.schema(fields, metadata={b'foo': b'bar'})
     roundtripped = pickle.loads(pickle.dumps(schema))
     assert schema == roundtripped
+
+
+def test_empty_table():
+    schema = pa.schema([
+        pa.field('oneField', pa.int64())
+    ])
+    table = schema.empty_table()
+    assert isinstance(table, pa.Table)
+    assert table.num_rows == 0
+    assert table.schema == schema
+
+
+@pytest.mark.pandas
+def test_schema_from_pandas():
+    import pandas as pd
+    inputs = [
+        list(range(10)),
+        pd.Categorical(list(range(10))),
+        ['foo', 'bar', None, 'baz', 'qux'],
+        np.array([
+            '2007-07-13T01:23:34.123456789',
+            '2006-01-13T12:34:56.432539784',
+            '2010-08-13T05:46:57.437699912'
+        ], dtype='datetime64[ns]')
+    ]
+    for data in inputs:
+        df = pd.DataFrame({'a': data})
+        schema = pa.Schema.from_pandas(df)
+        expected = pa.Table.from_pandas(df).schema
+        assert schema == expected

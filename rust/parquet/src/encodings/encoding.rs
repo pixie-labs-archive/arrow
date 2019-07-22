@@ -25,7 +25,7 @@ use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::{
-    bit_util::{log2, num_required_bits, BitWriter},
+    bit_util::{self, log2, num_required_bits, BitWriter},
     hash_util,
     memory::{Buffer, ByteBuffer, ByteBufferPtr, MemTrackerPtr},
 };
@@ -40,6 +40,23 @@ use crate::util::{
 pub trait Encoder<T: DataType> {
     /// Encodes data from `values`.
     fn put(&mut self, values: &[T::T]) -> Result<()>;
+
+    /// Encodes data from `values`, which contains spaces for null values, that is
+    /// identified by `valid_bits`.
+    ///
+    /// Returns the number of non-null values encoded.
+    fn put_spaced(&mut self, values: &[T::T], valid_bits: &[u8]) -> Result<usize> {
+        let num_values = values.len();
+        let mut buffer = Vec::with_capacity(num_values);
+        // TODO: this is pretty inefficient. Revisit in future.
+        for i in 0..num_values {
+            if bit_util::get_bit(valid_bits, i) {
+                buffer.push(values[i].clone());
+            }
+        }
+        self.put(&buffer[..])?;
+        Ok(buffer.len())
+    }
 
     /// Returns the encoding type of this encoder.
     fn encoding(&self) -> Encoding;
@@ -271,8 +288,8 @@ impl<T: DataType> DictEncoder<T> {
         plain_encoder.flush_buffer()
     }
 
-    /// Writes out the dictionary values with RLE encoding in a byte buffer, and return the
-    /// result.
+    /// Writes out the dictionary values with RLE encoding in a byte buffer, and return
+    /// the result.
     #[inline]
     pub fn write_indices(&mut self) -> Result<ByteBufferPtr> {
         // TODO: the caller should allocate the buffer
@@ -311,7 +328,9 @@ impl<T: DataType> DictEncoder<T> {
             self.hash_slots[j] = index;
             self.add_dict_key(value.clone());
 
-            if self.uniques.size() > (self.hash_table_size as f32 * MAX_HASH_LOAD) as usize {
+            if self.uniques.size()
+                > (self.hash_table_size as f32 * MAX_HASH_LOAD) as usize
+            {
                 self.double_table_size();
             }
         }
@@ -585,8 +604,9 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
     /// Writes page header for blocks, this method is invoked when we are done encoding
     /// values. It is also okay to encode when no values have been provided
     fn write_page_header(&mut self) {
-        // We ignore the result of each 'put' operation, because MAX_PAGE_HEADER_WRITER_SIZE
-        // is chosen to fit all header values and guarantees that writes will not fail.
+        // We ignore the result of each 'put' operation, because
+        // MAX_PAGE_HEADER_WRITER_SIZE is chosen to fit all header values and
+        // guarantees that writes will not fail.
 
         // Write the size of each block
         self.page_header_writer.put_vlq_int(self.block_size as u64);
@@ -622,8 +642,8 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
         };
 
         for i in 0..self.num_mini_blocks {
-            // Find how many values we need to encode - either block size or whatever values
-            // left
+            // Find how many values we need to encode - either block size or whatever
+            // values left
             let n = cmp::min(self.mini_block_size, self.values_in_block);
             if n == 0 {
                 break;
@@ -632,7 +652,8 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
             // Compute the max delta in current mini block
             let mut max_delta = i64::min_value();
             for j in 0..n {
-                max_delta = cmp::max(max_delta, self.deltas[i * self.mini_block_size + j]);
+                max_delta =
+                    cmp::max(max_delta, self.deltas[i * self.mini_block_size + j]);
             }
 
             // Compute bit width to store (max_delta - min_delta)
@@ -641,8 +662,8 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
 
             // Encode values in current mini block using min_delta and bit_width
             for j in 0..n {
-                let packed_value =
-                    self.subtract_u64(self.deltas[i * self.mini_block_size + j], min_delta);
+                let packed_value = self
+                    .subtract_u64(self.deltas[i * self.mini_block_size + j], min_delta);
                 self.bit_writer.put_value(packed_value, bit_width);
             }
 
@@ -913,7 +934,9 @@ impl<T: DataType> DeltaByteArrayEncoder<T> {
 
 impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
     default fn put(&mut self, _values: &[T::T]) -> Result<()> {
-        panic!("DeltaByteArrayEncoder only supports ByteArrayType and FixedLenByteArrayType");
+        panic!(
+            "DeltaByteArrayEncoder only supports ByteArrayType and FixedLenByteArrayType"
+        );
     }
 
     fn encoding(&self) -> Encoding {
@@ -926,7 +949,9 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
     }
 
     default fn flush_buffer(&mut self) -> Result<ByteBufferPtr> {
-        panic!("DeltaByteArrayEncoder only supports ByteArrayType and FixedLenByteArrayType");
+        panic!(
+            "DeltaByteArrayEncoder only supports ByteArrayType and FixedLenByteArrayType"
+        );
     }
 }
 
@@ -937,10 +962,12 @@ impl Encoder<ByteArrayType> for DeltaByteArrayEncoder<ByteArrayType> {
 
         for byte_array in values {
             let current = byte_array.data();
-            // Maximum prefix length that is shared between previous value and current value
+            // Maximum prefix length that is shared between previous value and current
+            // value
             let prefix_len = cmp::min(self.previous.len(), current.len());
             let mut match_len = 0;
-            while match_len < prefix_len && self.previous[match_len] == current[match_len] {
+            while match_len < prefix_len && self.previous[match_len] == current[match_len]
+            {
                 match_len += 1;
             }
             prefix_lengths.push(match_len as i32);
@@ -972,12 +999,14 @@ impl Encoder<ByteArrayType> for DeltaByteArrayEncoder<ByteArrayType> {
 
 impl Encoder<FixedLenByteArrayType> for DeltaByteArrayEncoder<FixedLenByteArrayType> {
     fn put(&mut self, values: &[ByteArray]) -> Result<()> {
-        let s: &mut DeltaByteArrayEncoder<ByteArrayType> = unsafe { mem::transmute(self) };
+        let s: &mut DeltaByteArrayEncoder<ByteArrayType> =
+            unsafe { mem::transmute(self) };
         s.put(values)
     }
 
     fn flush_buffer(&mut self) -> Result<ByteBufferPtr> {
-        let s: &mut DeltaByteArrayEncoder<ByteArrayType> = unsafe { mem::transmute(self) };
+        let s: &mut DeltaByteArrayEncoder<ByteArrayType> =
+            unsafe { mem::transmute(self) };
         s.flush_buffer()
     }
 }
@@ -989,8 +1018,13 @@ mod tests {
     use std::rc::Rc;
 
     use crate::decoding::{get_decoder, Decoder, DictDecoder, PlainDecoder};
-    use crate::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type as SchemaType};
-    use crate::util::{memory::MemTracker, test_common::RandGen};
+    use crate::schema::types::{
+        ColumnDescPtr, ColumnDescriptor, ColumnPath, Type as SchemaType,
+    };
+    use crate::util::{
+        memory::MemTracker,
+        test_common::{random_bytes, RandGen},
+    };
 
     const TEST_SET_SIZE: usize = 1024;
 
@@ -1080,7 +1114,11 @@ mod tests {
 
     #[test]
     fn test_dict_encoded_size() {
-        fn run_test<T: DataType>(type_length: i32, values: &[T::T], expected_size: usize) {
+        fn run_test<T: DataType>(
+            type_length: i32,
+            values: &[T::T],
+            expected_size: usize,
+        ) {
             let mut encoder = create_test_dict_encoder::<T>(type_length);
             assert_eq!(encoder.dict_encoded_size(), 0);
             encoder.put(values).unwrap();
@@ -1102,8 +1140,16 @@ mod tests {
             &[Int96::from(vec![1, 2, 3]), Int96::from(vec![2, 3, 4])],
             32,
         );
-        run_test::<ByteArrayType>(-1, &[ByteArray::from("abcd"), ByteArray::from("efj")], 15);
-        run_test::<FixedLenByteArrayType>(2, &[ByteArray::from("ab"), ByteArray::from("bc")], 4);
+        run_test::<ByteArrayType>(
+            -1,
+            &[ByteArray::from("abcd"), ByteArray::from("efj")],
+            15,
+        );
+        run_test::<FixedLenByteArrayType>(
+            2,
+            &[ByteArray::from("ab"), ByteArray::from("bc")],
+            4,
+        );
     }
 
     #[test]
@@ -1179,8 +1225,10 @@ mod tests {
     // See: https://github.com/sunchao/parquet-rs/issues/47
     #[test]
     fn test_issue_47() {
-        let mut encoder = create_test_encoder::<ByteArrayType>(0, Encoding::DELTA_BYTE_ARRAY);
-        let mut decoder = create_test_decoder::<ByteArrayType>(0, Encoding::DELTA_BYTE_ARRAY);
+        let mut encoder =
+            create_test_encoder::<ByteArrayType>(0, Encoding::DELTA_BYTE_ARRAY);
+        let mut decoder =
+            create_test_decoder::<ByteArrayType>(0, Encoding::DELTA_BYTE_ARRAY);
 
         let mut input = vec![];
         input.push(ByteArray::from("aa"));
@@ -1189,7 +1237,8 @@ mod tests {
         input.push(ByteArray::from("aaa"));
         let mut output = vec![ByteArray::default(); input.len()];
 
-        let mut result = put_and_get(&mut encoder, &mut decoder, &input[..2], &mut output[..2]);
+        let mut result =
+            put_and_get(&mut encoder, &mut decoder, &input[..2], &mut output[..2]);
         assert!(
             result.is_ok(),
             "first put_and_get() failed with: {}",
@@ -1231,6 +1280,27 @@ mod tests {
             let mut decoder = create_test_decoder::<T>(type_length, enc);
             let mut values = <T as RandGen<T>>::gen_vec(type_length, total);
             let mut result_data = vec![T::T::default(); total];
+
+            // Test put/get spaced.
+            let num_bytes = bit_util::ceil(total as i64, 8);
+            let valid_bits = random_bytes(num_bytes as usize);
+            let values_written = encoder.put_spaced(&values[..], &valid_bits[..])?;
+            let data = encoder.flush_buffer()?;
+            decoder.set_data(data, values_written)?;
+            let _ = decoder.get_spaced(
+                &mut result_data[..],
+                values.len() - values_written,
+                &valid_bits[..],
+            )?;
+
+            // Check equality
+            for i in 0..total {
+                if bit_util::get_bit(&valid_bits[..], i) {
+                    assert_eq!(result_data[i], values[i]);
+                } else {
+                    assert_eq!(result_data[i], T::T::default());
+                }
+            }
 
             let mut actual_total = put_and_get(
                 &mut encoder,
@@ -1304,7 +1374,10 @@ mod tests {
         decoder.get(output)
     }
 
-    fn create_and_check_encoder<T: DataType>(encoding: Encoding, err: Option<ParquetError>) {
+    fn create_and_check_encoder<T: DataType>(
+        encoding: Encoding,
+        err: Option<ParquetError>,
+    ) {
         let descr = create_test_col_desc_ptr(-1, T::get_physical_type());
         let mem_tracker = Rc::new(MemTracker::new());
         let encoder = get_encoder::<T>(descr, encoding, mem_tracker);

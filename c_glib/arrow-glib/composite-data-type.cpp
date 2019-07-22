@@ -88,9 +88,26 @@ garrow_list_data_type_new(GArrowField *field)
  * @list_data_type: A #GArrowListDataType.
  *
  * Returns: (transfer full): The field of value.
+ *
+ * Deprecated: 0.13.0:
+ *   Use garrow_list_data_type_get_field() instead.
  */
 GArrowField *
 garrow_list_data_type_get_value_field(GArrowListDataType *list_data_type)
+{
+  return garrow_list_data_type_get_field(list_data_type);
+}
+
+/**
+ * garrow_list_data_type_get_field:
+ * @list_data_type: A #GArrowListDataType.
+ *
+ * Returns: (transfer full): The field of value.
+ *
+ * Since: 0.13.0
+ */
+GArrowField *
+garrow_list_data_type_get_field(GArrowListDataType *list_data_type)
 {
   auto data_type = GARROW_DATA_TYPE(list_data_type);
   auto arrow_data_type = garrow_data_type_get_raw(data_type);
@@ -98,7 +115,7 @@ garrow_list_data_type_get_value_field(GArrowListDataType *list_data_type)
     static_cast<arrow::ListType *>(arrow_data_type.get());
 
   auto arrow_field = arrow_list_data_type->value_field();
-  return garrow_field_new_raw(&arrow_field, data_type);
+  return garrow_field_new_raw(&arrow_field, nullptr);
 }
 
 
@@ -172,8 +189,7 @@ garrow_struct_data_type_get_fields(GArrowStructDataType *struct_data_type)
 
   GList *fields = NULL;
   for (auto arrow_field : arrow_fields) {
-    fields = g_list_prepend(fields,
-                            garrow_field_new_raw(&arrow_field, data_type));
+    fields = g_list_prepend(fields, garrow_field_new_raw(&arrow_field, nullptr));
   }
   return g_list_reverse(fields);
 }
@@ -207,7 +223,7 @@ garrow_struct_data_type_get_field(GArrowStructDataType *struct_data_type,
 
   auto arrow_field = arrow_data_type->child(i);
   if (arrow_field) {
-    return garrow_field_new_raw(&arrow_field, data_type);
+    return garrow_field_new_raw(&arrow_field, nullptr);
   } else {
     return NULL;
   }
@@ -234,7 +250,7 @@ garrow_struct_data_type_get_field_by_name(GArrowStructDataType *struct_data_type
 
   auto arrow_field = arrow_struct_data_type->GetFieldByName(name);
   if (arrow_field) {
-    return garrow_field_new_raw(&arrow_field, data_type);
+    return garrow_field_new_raw(&arrow_field, nullptr);
   } else {
     return NULL;
   }
@@ -309,8 +325,7 @@ garrow_union_data_type_get_fields(GArrowUnionDataType *union_data_type)
 
   GList *fields = NULL;
   for (auto arrow_field : arrow_fields) {
-    fields = g_list_prepend(fields,
-                            garrow_field_new_raw(&arrow_field, data_type));
+    fields = g_list_prepend(fields, garrow_field_new_raw(&arrow_field, nullptr));
   }
   return g_list_reverse(fields);
 }
@@ -344,7 +359,7 @@ garrow_union_data_type_get_field(GArrowUnionDataType *union_data_type,
 
   auto arrow_field = arrow_data_type->child(i);
   if (arrow_field) {
-    return garrow_field_new_raw(&arrow_field, data_type);
+    return garrow_field_new_raw(&arrow_field, nullptr);
   } else {
     return NULL;
   }
@@ -498,7 +513,7 @@ garrow_dictionary_data_type_class_init(GArrowDictionaryDataTypeClass *klass)
 /**
  * garrow_dictionary_data_type_new:
  * @index_data_type: The data type of index.
- * @dictionary: The dictionary.
+ * @value_data_type: The data type of dictionary values.
  * @ordered: Whether dictionary contents are ordered or not.
  *
  * Returns: The newly created dictionary data type.
@@ -507,13 +522,13 @@ garrow_dictionary_data_type_class_init(GArrowDictionaryDataTypeClass *klass)
  */
 GArrowDictionaryDataType *
 garrow_dictionary_data_type_new(GArrowDataType *index_data_type,
-                                GArrowArray *dictionary,
+                                GArrowDataType *value_data_type,
                                 gboolean ordered)
 {
   auto arrow_index_data_type = garrow_data_type_get_raw(index_data_type);
-  auto arrow_dictionary = garrow_array_get_raw(dictionary);
+  auto arrow_value_data_type = garrow_data_type_get_raw(value_data_type);
   auto arrow_data_type = arrow::dictionary(arrow_index_data_type,
-                                           arrow_dictionary,
+                                           arrow_value_data_type,
                                            ordered);
   return GARROW_DICTIONARY_DATA_TYPE(garrow_data_type_new_raw(&arrow_data_type));
 }
@@ -537,21 +552,21 @@ garrow_dictionary_data_type_get_index_data_type(GArrowDictionaryDataType *dictio
 }
 
 /**
- * garrow_dictionary_data_type_get_dictionary:
+ * garrow_dictionary_data_type_get_value_data_type:
  * @dictionary_data_type: The #GArrowDictionaryDataType.
  *
- * Returns: (transfer full): The dictionary as #GArrowArray.
+ * Returns: (transfer full): The #GArrowDataType of dictionary values.
  *
- * Since: 0.8.0
+ * Since: 0.14.0
  */
-GArrowArray *
-garrow_dictionary_data_type_get_dictionary(GArrowDictionaryDataType *dictionary_data_type)
+GArrowDataType *
+garrow_dictionary_data_type_get_value_data_type(GArrowDictionaryDataType *dictionary_data_type)
 {
   auto arrow_data_type = garrow_data_type_get_raw(GARROW_DATA_TYPE(dictionary_data_type));
   auto arrow_dictionary_data_type =
     std::static_pointer_cast<arrow::DictionaryType>(arrow_data_type);
-  auto arrow_dictionary = arrow_dictionary_data_type->dictionary();
-  return garrow_array_new_raw(&arrow_dictionary);
+  auto arrow_value_data_type = arrow_dictionary_data_type->value_type();
+  return garrow_data_type_new_raw(&arrow_value_data_type);
 }
 
 /**

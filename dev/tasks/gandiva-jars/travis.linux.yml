@@ -32,6 +32,7 @@ env:
     - ARROW_TRAVIS_USE_TOOLCHAIN=1
 
 before_install:
+  # gcc 4.9 is required for the static linking of libstdc++
   - export CC="gcc-4.9" CXX="g++-4.9"
   - ulimit -c unlimited -S
   - |
@@ -40,17 +41,18 @@ before_install:
       sudo apt-get update -qq
 
 before_script:
-  - git clone -b {{ arrow.branch }} {{ arrow.remote }} arrow
-  - git -C arrow checkout {{ arrow.head }}
-  - arrow/ci/travis_install_linux.sh
-  - arrow/ci/travis_install_clang_tools.sh
+  - git clone --no-checkout {{ arrow.remote }} arrow
+  - git -C arrow fetch -t {{ arrow.remote }} {{ arrow.branch }}
+  - git -C arrow checkout FETCH_HEAD
+
   - export TRAVIS_BUILD_DIR=$TRAVIS_BUILD_DIR/arrow
-  - arrow/ci/travis_install_toolchain.sh
 
 script:
+  - cd $TRAVIS_BUILD_DIR
   - mkdir -p dist
-  - arrow/dev/tasks/gandiva-jars/build-cpp.sh
-  - arrow/dev/tasks/gandiva-jars/build-java.sh
+  # please refer to README for steps to update this image
+  - docker run -v $PWD:/io -v $PWD:/arrow quay.io/praveenbingo/arrow:buildGandivaDocker /io/dev/tasks/gandiva-jars/build-cpp-linux.sh || travis_terminate 1
+  - dev/tasks/gandiva-jars/build-java.sh || travis_terminate 1
 
 deploy:
   provider: releases

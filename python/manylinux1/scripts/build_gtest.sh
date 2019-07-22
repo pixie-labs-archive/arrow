@@ -25,15 +25,15 @@ pushd googletest-release-${GTEST_VERSION}
 
 mkdir build_so
 pushd build_so
-cmake -DCMAKE_CXX_FLAGS='-fPIC' -Dgtest_force_shared_crt=ON -DBUILD_SHARED_LIBS=ON -DBUILD_GMOCK=OFF -GNinja -DCMAKE_INSTALL_PREFIX=/usr ..
+cmake -DCMAKE_CXX_FLAGS='-fPIC' -Dgtest_force_shared_crt=ON -DBUILD_SHARED_LIBS=ON -DBUILD_GMOCK=ON -GNinja -DCMAKE_INSTALL_PREFIX=/usr ..
 ninja install
 popd
 
 mkdir build_a
 pushd build_a
-cmake -DCMAKE_CXX_FLAGS='-fPIC' -Dgtest_force_shared_crt=ON -DBUILD_SHARED_LIBS=OFF -DBUILD_GMOCK=OFF -GNinja -DCMAKE_INSTALL_PREFIX=/usr ..
+cmake -DCMAKE_CXX_FLAGS='-fPIC' -Dgtest_force_shared_crt=ON -DBUILD_SHARED_LIBS=OFF -DBUILD_GMOCK=ON -GNinja -DCMAKE_INSTALL_PREFIX=/usr ..
 ninja install
 popd
 
 popd
-rm -rf googletest-release-${GTEST_VERSION}.tar.gz
+rm -rf googletest-release-${GTEST_VERSION}.tar.gz googletest-release-${GTEST_VERSION}

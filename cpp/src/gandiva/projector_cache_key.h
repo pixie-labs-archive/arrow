@@ -31,8 +31,8 @@ namespace gandiva {
 class ProjectorCacheKey {
  public:
   ProjectorCacheKey(SchemaPtr schema, std::shared_ptr<Configuration> configuration,
-                    ExpressionVector expression_vector)
-      : schema_(schema), configuration_(configuration), uniqifier_(0) {
+                    ExpressionVector expression_vector, SelectionVector::Mode mode)
+      : schema_(schema), configuration_(configuration), mode_(mode), uniqifier_(0) {
     static const int kSeedValue = 4;
     size_t result = kSeedValue;
     for (auto& expr : expression_vector) {
@@ -41,7 +41,8 @@ class ProjectorCacheKey {
       boost::hash_combine(result, expr_as_string);
       UpdateUniqifier(expr_as_string);
     }
-    boost::hash_combine(result, configuration);
+    boost::hash_combine(result, mode);
+    boost::hash_combine(result, configuration->Hash());
     boost::hash_combine(result, schema_->ToString());
     boost::hash_combine(result, uniqifier_);
     hash_code_ = result;
@@ -55,11 +56,15 @@ class ProjectorCacheKey {
       return false;
     }
 
-    if (configuration_ != other.configuration_) {
+    if (*configuration_ != *other.configuration_) {
       return false;
     }
 
     if (expressions_as_strings_ != other.expressions_as_strings_) {
+      return false;
+    }
+
+    if (mode_ != other.mode_) {
       return false;
     }
 
@@ -107,6 +112,7 @@ class ProjectorCacheKey {
 
   const SchemaPtr schema_;
   const std::shared_ptr<Configuration> configuration_;
+  SelectionVector::Mode mode_;
   std::vector<std::string> expressions_as_strings_;
   size_t hash_code_;
   uint32_t uniqifier_;

@@ -22,9 +22,11 @@
 #include "gtest/gtest.h"
 
 #include "arrow/ipc/api.h"
+#include "arrow/ipc/dictionary.h"
 #include "arrow/ipc/test-common.h"
 #include "arrow/status.h"
-#include "arrow/test-util.h"
+#include "arrow/testing/gtest_util.h"
+#include "arrow/testing/util.h"
 
 #include "arrow/gpu/cuda_api.h"
 
@@ -320,7 +322,7 @@ class TestCudaArrowIpc : public TestCudaBufferBase {
 
 TEST_F(TestCudaArrowIpc, BasicWriteRead) {
   std::shared_ptr<RecordBatch> batch;
-  ASSERT_OK(ipc::MakeIntRecordBatch(&batch));
+  ASSERT_OK(ipc::test::MakeIntRecordBatch(&batch));
 
   std::shared_ptr<CudaBuffer> device_serialized;
   ASSERT_OK(SerializeRecordBatch(*batch, context_.get(), &device_serialized));
@@ -338,9 +340,24 @@ TEST_F(TestCudaArrowIpc, BasicWriteRead) {
 
   std::shared_ptr<RecordBatch> cpu_batch;
   io::BufferReader cpu_reader(host_buffer);
-  ASSERT_OK(ipc::ReadRecordBatch(batch->schema(), &cpu_reader, &cpu_batch));
+  ipc::DictionaryMemo unused_memo;
+  ASSERT_OK(ipc::ReadRecordBatch(batch->schema(), &unused_memo, &cpu_reader, &cpu_batch));
 
   CompareBatch(*batch, *cpu_batch);
+}
+
+class TestCudaContext : public TestCudaBufferBase {
+ public:
+  void SetUp() { TestCudaBufferBase::SetUp(); }
+};
+
+TEST_F(TestCudaContext, GetDeviceAddress) {
+  const int64_t kSize = 100;
+  std::shared_ptr<CudaBuffer> buffer;
+  uint8_t* devptr = NULL;
+  ASSERT_OK(context_->Allocate(kSize, &buffer));
+  ASSERT_OK(context_->GetDeviceAddress(buffer.get()->mutable_data(), &devptr));
+  ASSERT_EQ(buffer.get()->mutable_data(), devptr);
 }
 
 }  // namespace cuda

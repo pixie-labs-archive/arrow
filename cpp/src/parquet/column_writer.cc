@@ -17,22 +17,29 @@
 
 #include "parquet/column_writer.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <utility>
 
-#include "arrow/util/bit-util.h"
+#include "arrow/buffer-builder.h"
+#include "arrow/status.h"
+#include "arrow/util/bit-stream-utils.h"
+#include "arrow/util/checked_cast.h"
 #include "arrow/util/compression.h"
 #include "arrow/util/logging.h"
 #include "arrow/util/rle-encoding.h"
 
-#include "parquet/encoding-internal.h"
+#include "parquet/metadata.h"
+#include "parquet/platform.h"
 #include "parquet/properties.h"
 #include "parquet/statistics.h"
 #include "parquet/thrift.h"
-#include "parquet/util/memory.h"
+#include "parquet/types.h"
 
 namespace parquet {
+
+using ::arrow::internal::checked_cast;
 
 using BitWriter = ::arrow::BitUtil::BitWriter;
 using RleEncoder = ::arrow::util::RleEncoder;
@@ -113,24 +120,13 @@ int LevelEncoder::Encode(int batch_size, const int16_t* levels) {
 // ----------------------------------------------------------------------
 // PageWriter implementation
 
-static format::Statistics ToThrift(const EncodedStatistics& row_group_statistics) {
-  format::Statistics statistics;
-  if (row_group_statistics.has_min) statistics.__set_min(row_group_statistics.min());
-  if (row_group_statistics.has_max) statistics.__set_max(row_group_statistics.max());
-  if (row_group_statistics.has_null_count)
-    statistics.__set_null_count(row_group_statistics.null_count);
-  if (row_group_statistics.has_distinct_count)
-    statistics.__set_distinct_count(row_group_statistics.distinct_count);
-  return statistics;
-}
-
 // This subclass delimits pages appearing in a serialized stream, each preceded
 // by a serialized Thrift format::PageHeader indicating the type of each page
 // and the page metadata.
 class SerializedPageWriter : public PageWriter {
  public:
-  SerializedPageWriter(OutputStream* sink, Compression::type codec,
-                       ColumnChunkMetaDataBuilder* metadata,
+  SerializedPageWriter(const std::shared_ptr<ArrowOutputStream>& sink,
+                       Compression::type codec, ColumnChunkMetaDataBuilder* metadata,
                        ::arrow::MemoryPool* pool = ::arrow::default_memory_pool())
       : sink_(sink),
         metadata_(metadata),
@@ -168,17 +164,20 @@ class SerializedPageWriter : public PageWriter {
     page_header.__set_dictionary_page_header(dict_page_header);
     // TODO(PARQUET-594) crc checksum
 
-    int64_t start_pos = sink_->Tell();
+    int64_t start_pos = -1;
+    PARQUET_THROW_NOT_OK(sink_->Tell(&start_pos));
     if (dictionary_page_offset_ == 0) {
       dictionary_page_offset_ = start_pos;
     }
-    int64_t header_size = thrift_serializer_->Serialize(&page_header, sink_);
-    sink_->Write(compressed_data->data(), compressed_data->size());
+    int64_t header_size = thrift_serializer_->Serialize(&page_header, sink_.get());
+    PARQUET_THROW_NOT_OK(sink_->Write(compressed_data->data(), compressed_data->size()));
 
     total_uncompressed_size_ += uncompressed_size + header_size;
     total_compressed_size_ += compressed_data->size() + header_size;
 
-    return sink_->Tell() - start_pos;
+    int64_t final_pos = -1;
+    PARQUET_THROW_NOT_OK(sink_->Tell(&final_pos));
+    return final_pos - start_pos;
   }
 
   void Close(bool has_dictionary, bool fallback) override {
@@ -188,7 +187,7 @@ class SerializedPageWriter : public PageWriter {
                       fallback);
 
     // Write metadata at end of column chunk
-    metadata_->WriteTo(sink_);
+    metadata_->WriteTo(sink_.get());
   }
 
   /**
@@ -232,19 +231,22 @@ class SerializedPageWriter : public PageWriter {
     page_header.__set_data_page_header(data_page_header);
     // TODO(PARQUET-594) crc checksum
 
-    int64_t start_pos = sink_->Tell();
+    int64_t start_pos = -1;
+    PARQUET_THROW_NOT_OK(sink_->Tell(&start_pos));
     if (data_page_offset_ == 0) {
       data_page_offset_ = start_pos;
     }
 
-    int64_t header_size = thrift_serializer_->Serialize(&page_header, sink_);
-    sink_->Write(compressed_data->data(), compressed_data->size());
+    int64_t header_size = thrift_serializer_->Serialize(&page_header, sink_.get());
+    PARQUET_THROW_NOT_OK(sink_->Write(compressed_data->data(), compressed_data->size()));
 
     total_uncompressed_size_ += uncompressed_size + header_size;
     total_compressed_size_ += compressed_data->size() + header_size;
     num_values_ += page.num_values();
 
-    return sink_->Tell() - start_pos;
+    int64_t current_pos = -1;
+    PARQUET_THROW_NOT_OK(sink_->Tell(&current_pos));
+    return current_pos - start_pos;
   }
 
   bool has_compressor() override { return (compressor_ != nullptr); }
@@ -260,7 +262,7 @@ class SerializedPageWriter : public PageWriter {
   int64_t total_uncompressed_size() { return total_uncompressed_size_; }
 
  private:
-  OutputStream* sink_;
+  std::shared_ptr<ArrowOutputStream> sink_;
   ColumnChunkMetaDataBuilder* metadata_;
   ::arrow::MemoryPool* pool_;
   int64_t num_values_;
@@ -278,13 +280,14 @@ class SerializedPageWriter : public PageWriter {
 // This implementation of the PageWriter writes to the final sink on Close .
 class BufferedPageWriter : public PageWriter {
  public:
-  BufferedPageWriter(OutputStream* sink, Compression::type codec,
-                     ColumnChunkMetaDataBuilder* metadata,
+  BufferedPageWriter(const std::shared_ptr<ArrowOutputStream>& sink,
+                     Compression::type codec, ColumnChunkMetaDataBuilder* metadata,
                      ::arrow::MemoryPool* pool = ::arrow::default_memory_pool())
-      : final_sink_(sink),
-        metadata_(metadata),
-        in_memory_sink_(new InMemoryOutputStream(pool)),
-        pager_(new SerializedPageWriter(in_memory_sink_.get(), codec, metadata, pool)) {}
+      : final_sink_(sink), metadata_(metadata) {
+    in_memory_sink_ = CreateOutputStream(pool);
+    pager_ = std::unique_ptr<SerializedPageWriter>(
+        new SerializedPageWriter(in_memory_sink_, codec, metadata, pool));
+  }
 
   int64_t WriteDictionaryPage(const DictionaryPage& page) override {
     return pager_->WriteDictionaryPage(page);
@@ -292,17 +295,20 @@ class BufferedPageWriter : public PageWriter {
 
   void Close(bool has_dictionary, bool fallback) override {
     // index_page_offset = -1 since they are not supported
+    int64_t final_position = -1;
+    PARQUET_THROW_NOT_OK(final_sink_->Tell(&final_position));
     metadata_->Finish(
-        pager_->num_values(), pager_->dictionary_page_offset() + final_sink_->Tell(), -1,
-        pager_->data_page_offset() + final_sink_->Tell(), pager_->total_compressed_size(),
+        pager_->num_values(), pager_->dictionary_page_offset() + final_position, -1,
+        pager_->data_page_offset() + final_position, pager_->total_compressed_size(),
         pager_->total_uncompressed_size(), has_dictionary, fallback);
 
     // Write metadata at end of column chunk
     metadata_->WriteTo(in_memory_sink_.get());
 
     // flush everything to the serialized sink
-    auto buffer = in_memory_sink_->GetBuffer();
-    final_sink_->Write(buffer->data(), buffer->size());
+    std::shared_ptr<Buffer> buffer;
+    PARQUET_THROW_NOT_OK(in_memory_sink_->Finish(&buffer));
+    PARQUET_THROW_NOT_OK(final_sink_->Write(buffer->data(), buffer->size()));
   }
 
   int64_t WriteDataPage(const CompressedDataPage& page) override {
@@ -316,16 +322,16 @@ class BufferedPageWriter : public PageWriter {
   bool has_compressor() override { return pager_->has_compressor(); }
 
  private:
-  OutputStream* final_sink_;
+  std::shared_ptr<ArrowOutputStream> final_sink_;
   ColumnChunkMetaDataBuilder* metadata_;
-  std::unique_ptr<InMemoryOutputStream> in_memory_sink_;
+  std::shared_ptr<::arrow::io::BufferOutputStream> in_memory_sink_;
   std::unique_ptr<SerializedPageWriter> pager_;
 };
 
-std::unique_ptr<PageWriter> PageWriter::Open(OutputStream* sink, Compression::type codec,
-                                             ColumnChunkMetaDataBuilder* metadata,
-                                             ::arrow::MemoryPool* pool,
-                                             bool buffered_row_group) {
+std::unique_ptr<PageWriter> PageWriter::Open(
+    const std::shared_ptr<ArrowOutputStream>& sink, Compression::type codec,
+    ColumnChunkMetaDataBuilder* metadata, ::arrow::MemoryPool* pool,
+    bool buffered_row_group) {
   if (buffered_row_group) {
     return std::unique_ptr<PageWriter>(
         new BufferedPageWriter(sink, codec, metadata, pool));
@@ -344,57 +350,148 @@ std::shared_ptr<WriterProperties> default_writer_properties() {
   return default_writer_properties;
 }
 
-ColumnWriter::ColumnWriter(ColumnChunkMetaDataBuilder* metadata,
-                           std::unique_ptr<PageWriter> pager, bool has_dictionary,
-                           Encoding::type encoding, const WriterProperties* properties)
-    : metadata_(metadata),
-      descr_(metadata->descr()),
-      pager_(std::move(pager)),
-      has_dictionary_(has_dictionary),
-      encoding_(encoding),
-      properties_(properties),
-      allocator_(properties->memory_pool()),
-      num_buffered_values_(0),
-      num_buffered_encoded_values_(0),
-      rows_written_(0),
-      total_bytes_written_(0),
-      total_compressed_bytes_(0),
-      closed_(false),
-      fallback_(false) {
-  definition_levels_sink_.reset(new InMemoryOutputStream(allocator_));
-  repetition_levels_sink_.reset(new InMemoryOutputStream(allocator_));
-  definition_levels_rle_ =
-      std::static_pointer_cast<ResizableBuffer>(AllocateBuffer(allocator_, 0));
-  repetition_levels_rle_ =
-      std::static_pointer_cast<ResizableBuffer>(AllocateBuffer(allocator_, 0));
-  uncompressed_data_ =
-      std::static_pointer_cast<ResizableBuffer>(AllocateBuffer(allocator_, 0));
-  if (pager_->has_compressor()) {
-    compressed_data_ =
+class ColumnWriterImpl {
+ public:
+  ColumnWriterImpl(ColumnChunkMetaDataBuilder* metadata,
+                   std::unique_ptr<PageWriter> pager, const bool use_dictionary,
+                   Encoding::type encoding, const WriterProperties* properties)
+      : metadata_(metadata),
+        descr_(metadata->descr()),
+        pager_(std::move(pager)),
+        has_dictionary_(use_dictionary),
+        encoding_(encoding),
+        properties_(properties),
+        allocator_(properties->memory_pool()),
+        num_buffered_values_(0),
+        num_buffered_encoded_values_(0),
+        rows_written_(0),
+        total_bytes_written_(0),
+        total_compressed_bytes_(0),
+        closed_(false),
+        fallback_(false),
+        definition_levels_sink_(allocator_),
+        repetition_levels_sink_(allocator_) {
+    definition_levels_rle_ =
         std::static_pointer_cast<ResizableBuffer>(AllocateBuffer(allocator_, 0));
+    repetition_levels_rle_ =
+        std::static_pointer_cast<ResizableBuffer>(AllocateBuffer(allocator_, 0));
+    uncompressed_data_ =
+        std::static_pointer_cast<ResizableBuffer>(AllocateBuffer(allocator_, 0));
+    if (pager_->has_compressor()) {
+      compressed_data_ =
+          std::static_pointer_cast<ResizableBuffer>(AllocateBuffer(allocator_, 0));
+    }
   }
-}
 
-void ColumnWriter::InitSinks() {
-  definition_levels_sink_->Clear();
-  repetition_levels_sink_->Clear();
-}
+  virtual ~ColumnWriterImpl() = default;
 
-void ColumnWriter::WriteDefinitionLevels(int64_t num_levels, const int16_t* levels) {
-  DCHECK(!closed_);
-  definition_levels_sink_->Write(reinterpret_cast<const uint8_t*>(levels),
-                                 sizeof(int16_t) * num_levels);
-}
+  int64_t Close();
 
-void ColumnWriter::WriteRepetitionLevels(int64_t num_levels, const int16_t* levels) {
-  DCHECK(!closed_);
-  repetition_levels_sink_->Write(reinterpret_cast<const uint8_t*>(levels),
-                                 sizeof(int16_t) * num_levels);
-}
+ protected:
+  virtual std::shared_ptr<Buffer> GetValuesBuffer() = 0;
+
+  // Serializes Dictionary Page if enabled
+  virtual void WriteDictionaryPage() = 0;
+
+  // Plain-encoded statistics of the current page
+  virtual EncodedStatistics GetPageStatistics() = 0;
+
+  // Plain-encoded statistics of the whole chunk
+  virtual EncodedStatistics GetChunkStatistics() = 0;
+
+  // Merges page statistics into chunk statistics, then resets the values
+  virtual void ResetPageStatistics() = 0;
+
+  // Adds Data Pages to an in memory buffer in dictionary encoding mode
+  // Serializes the Data Pages in other encoding modes
+  void AddDataPage();
+
+  // Serializes Data Pages
+  void WriteDataPage(const CompressedDataPage& page);
+
+  // Write multiple definition levels
+  void WriteDefinitionLevels(int64_t num_levels, const int16_t* levels) {
+    DCHECK(!closed_);
+    PARQUET_THROW_NOT_OK(
+        definition_levels_sink_.Append(levels, sizeof(int16_t) * num_levels));
+  }
+
+  // Write multiple repetition levels
+  void WriteRepetitionLevels(int64_t num_levels, const int16_t* levels) {
+    DCHECK(!closed_);
+    PARQUET_THROW_NOT_OK(
+        repetition_levels_sink_.Append(levels, sizeof(int16_t) * num_levels));
+  }
+
+  // RLE encode the src_buffer into dest_buffer and return the encoded size
+  int64_t RleEncodeLevels(const void* src_buffer, ResizableBuffer* dest_buffer,
+                          int16_t max_level);
+
+  // Serialize the buffered Data Pages
+  void FlushBufferedDataPages();
+
+  ColumnChunkMetaDataBuilder* metadata_;
+  const ColumnDescriptor* descr_;
+
+  std::unique_ptr<PageWriter> pager_;
+
+  bool has_dictionary_;
+  Encoding::type encoding_;
+  const WriterProperties* properties_;
+
+  LevelEncoder level_encoder_;
+
+  ::arrow::MemoryPool* allocator_;
+
+  // The total number of values stored in the data page. This is the maximum of
+  // the number of encoded definition levels or encoded values. For
+  // non-repeated, required columns, this is equal to the number of encoded
+  // values. For repeated or optional values, there may be fewer data values
+  // than levels, and this tells you how many encoded levels there are in that
+  // case.
+  int64_t num_buffered_values_;
+
+  // The total number of stored values. For repeated or optional values, this
+  // number may be lower than num_buffered_values_.
+  int64_t num_buffered_encoded_values_;
+
+  // Total number of rows written with this ColumnWriter
+  int rows_written_;
+
+  // Records the total number of bytes written by the serializer
+  int64_t total_bytes_written_;
+
+  // Records the current number of compressed bytes in a column
+  int64_t total_compressed_bytes_;
+
+  // Flag to check if the Writer has been closed
+  bool closed_;
+
+  // Flag to infer if dictionary encoding has fallen back to PLAIN
+  bool fallback_;
+
+  ::arrow::BufferBuilder definition_levels_sink_;
+  ::arrow::BufferBuilder repetition_levels_sink_;
+
+  std::shared_ptr<ResizableBuffer> definition_levels_rle_;
+  std::shared_ptr<ResizableBuffer> repetition_levels_rle_;
+
+  std::shared_ptr<ResizableBuffer> uncompressed_data_;
+  std::shared_ptr<ResizableBuffer> compressed_data_;
+
+  std::vector<CompressedDataPage> data_pages_;
+
+ private:
+  void InitSinks() {
+    definition_levels_sink_.Rewind(0);
+    repetition_levels_sink_.Rewind(0);
+  }
+};
 
 // return the size of the encoded buffer
-int64_t ColumnWriter::RleEncodeLevels(const Buffer& src_buffer,
-                                      ResizableBuffer* dest_buffer, int16_t max_level) {
+int64_t ColumnWriterImpl::RleEncodeLevels(const void* src_buffer,
+                                          ResizableBuffer* dest_buffer,
+                                          int16_t max_level) {
   // TODO: This only works with due to some RLE specifics
   int64_t rle_size = LevelEncoder::MaxBufferSize(Encoding::RLE, max_level,
                                                  static_cast<int>(num_buffered_values_)) +
@@ -407,16 +504,15 @@ int64_t ColumnWriter::RleEncodeLevels(const Buffer& src_buffer,
   level_encoder_.Init(Encoding::RLE, max_level, static_cast<int>(num_buffered_values_),
                       dest_buffer->mutable_data() + sizeof(int32_t),
                       static_cast<int>(dest_buffer->size() - sizeof(int32_t)));
-  int encoded =
-      level_encoder_.Encode(static_cast<int>(num_buffered_values_),
-                            reinterpret_cast<const int16_t*>(src_buffer.data()));
+  int encoded = level_encoder_.Encode(static_cast<int>(num_buffered_values_),
+                                      reinterpret_cast<const int16_t*>(src_buffer));
   DCHECK_EQ(encoded, num_buffered_values_);
   reinterpret_cast<int32_t*>(dest_buffer->mutable_data())[0] = level_encoder_.len();
   int64_t encoded_size = level_encoder_.len() + sizeof(int32_t);
   return encoded_size;
 }
 
-void ColumnWriter::AddDataPage() {
+void ColumnWriterImpl::AddDataPage() {
   int64_t definition_levels_rle_size = 0;
   int64_t repetition_levels_rle_size = 0;
 
@@ -424,14 +520,14 @@ void ColumnWriter::AddDataPage() {
 
   if (descr_->max_definition_level() > 0) {
     definition_levels_rle_size =
-        RleEncodeLevels(definition_levels_sink_->GetBufferRef(),
-                        definition_levels_rle_.get(), descr_->max_definition_level());
+        RleEncodeLevels(definition_levels_sink_.data(), definition_levels_rle_.get(),
+                        descr_->max_definition_level());
   }
 
   if (descr_->max_repetition_level() > 0) {
     repetition_levels_rle_size =
-        RleEncodeLevels(repetition_levels_sink_->GetBufferRef(),
-                        repetition_levels_rle_.get(), descr_->max_repetition_level());
+        RleEncodeLevels(repetition_levels_sink_.data(), repetition_levels_rle_.get(),
+                        descr_->max_repetition_level());
   }
 
   int64_t uncompressed_size =
@@ -450,6 +546,8 @@ void ColumnWriter::AddDataPage() {
   memcpy(uncompressed_ptr, values->data(), values->size());
 
   EncodedStatistics page_stats = GetPageStatistics();
+  page_stats.ApplyStatSizeLimits(properties_->max_statistics_size(descr_->path()));
+  page_stats.set_is_signed(SortOrder::SIGNED == descr_->sort_order());
   ResetPageStatistics();
 
   std::shared_ptr<Buffer> compressed_data;
@@ -484,11 +582,11 @@ void ColumnWriter::AddDataPage() {
   num_buffered_encoded_values_ = 0;
 }
 
-void ColumnWriter::WriteDataPage(const CompressedDataPage& page) {
+void ColumnWriterImpl::WriteDataPage(const CompressedDataPage& page) {
   total_bytes_written_ += pager_->WriteDataPage(page);
 }
 
-int64_t ColumnWriter::Close() {
+int64_t ColumnWriterImpl::Close() {
   if (!closed_) {
     closed_ = true;
     if (has_dictionary_ && !fallback_) {
@@ -498,17 +596,13 @@ int64_t ColumnWriter::Close() {
     FlushBufferedDataPages();
 
     EncodedStatistics chunk_statistics = GetChunkStatistics();
+    chunk_statistics.ApplyStatSizeLimits(
+        properties_->max_statistics_size(descr_->path()));
+    chunk_statistics.set_is_signed(SortOrder::SIGNED == descr_->sort_order());
+
     // Write stats only if the column has at least one row written
-    // From parquet-mr
-    // Don't write stats larger than the max size rather than truncating. The
-    // rationale is that some engines may use the minimum value in the page as
-    // the true minimum for aggregations and there is no way to mark that a
-    // value has been truncated and is a lower bound and not in the page.
-    if (rows_written_ > 0 && chunk_statistics.is_set() &&
-        chunk_statistics.max_stat_length() <=
-            properties_->max_statistics_size(descr_->path())) {
-      metadata_->SetStatistics(SortOrder::SIGNED == descr_->sort_order(),
-                               chunk_statistics);
+    if (rows_written_ > 0 && chunk_statistics.is_set()) {
+      metadata_->SetStatistics(chunk_statistics);
     }
     pager_->Close(has_dictionary_, fallback_);
   }
@@ -516,7 +610,7 @@ int64_t ColumnWriter::Close() {
   return total_bytes_written_;
 }
 
-void ColumnWriter::FlushBufferedDataPages() {
+void ColumnWriterImpl::FlushBufferedDataPages() {
   // Write all outstanding data to a new page
   if (num_buffered_values_ > 0) {
     AddDataPage();
@@ -531,78 +625,135 @@ void ColumnWriter::FlushBufferedDataPages() {
 // ----------------------------------------------------------------------
 // TypedColumnWriter
 
-template <typename Type>
-TypedColumnWriter<Type>::TypedColumnWriter(ColumnChunkMetaDataBuilder* metadata,
-                                           std::unique_ptr<PageWriter> pager,
-                                           Encoding::type encoding,
-                                           const WriterProperties* properties)
-    : ColumnWriter(metadata, std::move(pager),
-                   (encoding == Encoding::PLAIN_DICTIONARY ||
-                    encoding == Encoding::RLE_DICTIONARY),
-                   encoding, properties) {
-  switch (encoding) {
-    case Encoding::PLAIN:
-      current_encoder_.reset(new PlainEncoder<Type>(descr_, properties->memory_pool()));
-      break;
-    case Encoding::PLAIN_DICTIONARY:
-    case Encoding::RLE_DICTIONARY:
-      current_encoder_.reset(new DictEncoder<Type>(descr_, properties->memory_pool()));
-      break;
-    default:
-      ParquetException::NYI("Selected encoding is not supported");
+template <typename DType>
+class TypedColumnWriterImpl : public ColumnWriterImpl, public TypedColumnWriter<DType> {
+ public:
+  using T = typename DType::c_type;
+
+  TypedColumnWriterImpl(ColumnChunkMetaDataBuilder* metadata,
+                        std::unique_ptr<PageWriter> pager, const bool use_dictionary,
+                        Encoding::type encoding, const WriterProperties* properties)
+      : ColumnWriterImpl(metadata, std::move(pager), use_dictionary, encoding,
+                         properties) {
+    current_encoder_ = MakeEncoder(DType::type_num, encoding, use_dictionary, descr_,
+                                   properties->memory_pool());
+
+    if (properties->statistics_enabled(descr_->path()) &&
+        (SortOrder::UNKNOWN != descr_->sort_order())) {
+      page_statistics_ = TypedStats::Make(descr_, allocator_);
+      chunk_statistics_ = TypedStats::Make(descr_, allocator_);
+    }
   }
 
-  if (properties->statistics_enabled(descr_->path()) &&
-      (SortOrder::UNKNOWN != descr_->sort_order())) {
-    page_statistics_ = std::unique_ptr<TypedStats>(new TypedStats(descr_, allocator_));
-    chunk_statistics_ = std::unique_ptr<TypedStats>(new TypedStats(descr_, allocator_));
+  int64_t Close() override { return ColumnWriterImpl::Close(); }
+
+  void WriteBatch(int64_t num_values, const int16_t* def_levels,
+                  const int16_t* rep_levels, const T* values) override;
+
+  void WriteBatchSpaced(int64_t num_values, const int16_t* def_levels,
+                        const int16_t* rep_levels, const uint8_t* valid_bits,
+                        int64_t valid_bits_offset, const T* values) override;
+
+  int64_t EstimatedBufferedValueBytes() const override {
+    return current_encoder_->EstimatedDataEncodedSize();
   }
-}
+
+ protected:
+  std::shared_ptr<Buffer> GetValuesBuffer() override {
+    return current_encoder_->FlushValues();
+  }
+  void WriteDictionaryPage() override;
+
+  // Checks if the Dictionary Page size limit is reached
+  // If the limit is reached, the Dictionary and Data Pages are serialized
+  // The encoding is switched to PLAIN
+  void CheckDictionarySizeLimit();
+
+  EncodedStatistics GetPageStatistics() override {
+    EncodedStatistics result;
+    if (page_statistics_) result = page_statistics_->Encode();
+    return result;
+  }
+
+  EncodedStatistics GetChunkStatistics() override {
+    EncodedStatistics result;
+    if (chunk_statistics_) result = chunk_statistics_->Encode();
+    return result;
+  }
+
+  void ResetPageStatistics() override;
+
+  Type::type type() const override { return descr_->physical_type(); }
+
+  const ColumnDescriptor* descr() const override { return descr_; }
+
+  int64_t rows_written() const override { return rows_written_; }
+
+  int64_t total_compressed_bytes() const override { return total_compressed_bytes_; }
+
+  int64_t total_bytes_written() const override { return total_bytes_written_; }
+
+  const WriterProperties* properties() override { return properties_; }
+
+ private:
+  inline int64_t WriteMiniBatch(int64_t num_values, const int16_t* def_levels,
+                                const int16_t* rep_levels, const T* values);
+
+  inline int64_t WriteMiniBatchSpaced(int64_t num_values, const int16_t* def_levels,
+                                      const int16_t* rep_levels,
+                                      const uint8_t* valid_bits,
+                                      int64_t valid_bits_offset, const T* values,
+                                      int64_t* num_spaced_written);
+
+  // Write values to a temporary buffer before they are encoded into pages
+  void WriteValues(int64_t num_values, const T* values);
+  void WriteValuesSpaced(int64_t num_values, const uint8_t* valid_bits,
+                         int64_t valid_bits_offset, const T* values);
+
+  using ValueEncoderType = typename EncodingTraits<DType>::Encoder;
+  std::unique_ptr<Encoder> current_encoder_;
+
+  using TypedStats = TypedStatistics<DType>;
+  std::shared_ptr<TypedStats> page_statistics_;
+  std::shared_ptr<TypedStats> chunk_statistics_;
+};
 
 // Only one Dictionary Page is written.
 // Fallback to PLAIN if dictionary page limit is reached.
-template <typename Type>
-void TypedColumnWriter<Type>::CheckDictionarySizeLimit() {
-  auto dict_encoder = static_cast<DictEncoder<Type>*>(current_encoder_.get());
+template <typename DType>
+void TypedColumnWriterImpl<DType>::CheckDictionarySizeLimit() {
+  // We have to dynamic cast here because TypedEncoder<Type> as some compilers
+  // don't want to cast through virtual inheritance
+  auto dict_encoder = dynamic_cast<DictEncoder<DType>*>(current_encoder_.get());
   if (dict_encoder->dict_encoded_size() >= properties_->dictionary_pagesize_limit()) {
     WriteDictionaryPage();
     // Serialize the buffered Dictionary Indicies
     FlushBufferedDataPages();
     fallback_ = true;
     // Only PLAIN encoding is supported for fallback in V1
-    current_encoder_.reset(new PlainEncoder<Type>(descr_, properties_->memory_pool()));
+    current_encoder_ = MakeEncoder(DType::type_num, Encoding::PLAIN, false, descr_,
+                                   properties_->memory_pool());
     encoding_ = Encoding::PLAIN;
   }
 }
 
-template <typename Type>
-void TypedColumnWriter<Type>::WriteDictionaryPage() {
-  auto dict_encoder = static_cast<DictEncoder<Type>*>(current_encoder_.get());
+template <typename DType>
+void TypedColumnWriterImpl<DType>::WriteDictionaryPage() {
+  // We have to dynamic cast here because TypedEncoder<Type> as some compilers
+  // don't want to cast through virtual inheritance
+  auto dict_encoder = dynamic_cast<DictEncoder<DType>*>(current_encoder_.get());
+  DCHECK(dict_encoder);
   std::shared_ptr<ResizableBuffer> buffer =
       AllocateBuffer(properties_->memory_pool(), dict_encoder->dict_encoded_size());
   dict_encoder->WriteDict(buffer->mutable_data());
 
   DictionaryPage page(buffer, dict_encoder->num_entries(),
-                      properties_->dictionary_index_encoding());
+                      properties_->dictionary_page_encoding());
   total_bytes_written_ += pager_->WriteDictionaryPage(page);
 }
 
-template <typename Type>
-EncodedStatistics TypedColumnWriter<Type>::GetPageStatistics() {
-  EncodedStatistics result;
-  if (page_statistics_) result = page_statistics_->Encode();
-  return result;
-}
-
-template <typename Type>
-EncodedStatistics TypedColumnWriter<Type>::GetChunkStatistics() {
-  EncodedStatistics result;
-  if (chunk_statistics_) result = chunk_statistics_->Encode();
-  return result;
-}
-
-template <typename Type>
-void TypedColumnWriter<Type>::ResetPageStatistics() {
+template <typename DType>
+void TypedColumnWriterImpl<DType>::ResetPageStatistics() {
   if (chunk_statistics_ != nullptr) {
     chunk_statistics_->Merge(*page_statistics_);
     page_statistics_->Reset();
@@ -610,57 +761,13 @@ void TypedColumnWriter<Type>::ResetPageStatistics() {
 }
 
 // ----------------------------------------------------------------------
-// Dynamic column writer constructor
-
-std::shared_ptr<ColumnWriter> ColumnWriter::Make(ColumnChunkMetaDataBuilder* metadata,
-                                                 std::unique_ptr<PageWriter> pager,
-                                                 const WriterProperties* properties) {
-  const ColumnDescriptor* descr = metadata->descr();
-  Encoding::type encoding = properties->encoding(descr->path());
-  if (properties->dictionary_enabled(descr->path()) &&
-      descr->physical_type() != Type::BOOLEAN) {
-    encoding = properties->dictionary_page_encoding();
-  }
-  switch (descr->physical_type()) {
-    case Type::BOOLEAN:
-      return std::make_shared<BoolWriter>(metadata, std::move(pager), encoding,
-                                          properties);
-    case Type::INT32:
-      return std::make_shared<Int32Writer>(metadata, std::move(pager), encoding,
-                                           properties);
-    case Type::INT64:
-      return std::make_shared<Int64Writer>(metadata, std::move(pager), encoding,
-                                           properties);
-    case Type::INT96:
-      return std::make_shared<Int96Writer>(metadata, std::move(pager), encoding,
-                                           properties);
-    case Type::FLOAT:
-      return std::make_shared<FloatWriter>(metadata, std::move(pager), encoding,
-                                           properties);
-    case Type::DOUBLE:
-      return std::make_shared<DoubleWriter>(metadata, std::move(pager), encoding,
-                                            properties);
-    case Type::BYTE_ARRAY:
-      return std::make_shared<ByteArrayWriter>(metadata, std::move(pager), encoding,
-                                               properties);
-    case Type::FIXED_LEN_BYTE_ARRAY:
-      return std::make_shared<FixedLenByteArrayWriter>(metadata, std::move(pager),
-                                                       encoding, properties);
-    default:
-      ParquetException::NYI("type reader not implemented");
-  }
-  // Unreachable code, but supress compiler warning
-  return std::shared_ptr<ColumnWriter>(nullptr);
-}
-
-// ----------------------------------------------------------------------
 // Instantiate templated classes
 
 template <typename DType>
-inline int64_t TypedColumnWriter<DType>::WriteMiniBatch(int64_t num_values,
-                                                        const int16_t* def_levels,
-                                                        const int16_t* rep_levels,
-                                                        const T* values) {
+int64_t TypedColumnWriterImpl<DType>::WriteMiniBatch(int64_t num_values,
+                                                     const int16_t* def_levels,
+                                                     const int16_t* rep_levels,
+                                                     const T* values) {
   int64_t values_to_write = 0;
   // If the field is required and non-repeated, there are no definition levels
   if (descr_->max_definition_level() > 0) {
@@ -717,7 +824,7 @@ inline int64_t TypedColumnWriter<DType>::WriteMiniBatch(int64_t num_values,
 }
 
 template <typename DType>
-inline int64_t TypedColumnWriter<DType>::WriteMiniBatchSpaced(
+int64_t TypedColumnWriterImpl<DType>::WriteMiniBatchSpaced(
     int64_t num_levels, const int16_t* def_levels, const int16_t* rep_levels,
     const uint8_t* valid_bits, int64_t valid_bits_offset, const T* values,
     int64_t* num_spaced_written) {
@@ -788,8 +895,10 @@ inline int64_t TypedColumnWriter<DType>::WriteMiniBatchSpaced(
 }
 
 template <typename DType>
-void TypedColumnWriter<DType>::WriteBatch(int64_t num_values, const int16_t* def_levels,
-                                          const int16_t* rep_levels, const T* values) {
+void TypedColumnWriterImpl<DType>::WriteBatch(int64_t num_values,
+                                              const int16_t* def_levels,
+                                              const int16_t* rep_levels,
+                                              const T* values) {
   // We check for DataPage limits only after we have inserted the values. If a user
   // writes a large number of values, the DataPage size can be much above the limit.
   // The purpose of this chunking is to bound this. Even if a user writes large number
@@ -812,7 +921,7 @@ void TypedColumnWriter<DType>::WriteBatch(int64_t num_values, const int16_t* def
 }
 
 template <typename DType>
-void TypedColumnWriter<DType>::WriteBatchSpaced(
+void TypedColumnWriterImpl<DType>::WriteBatchSpaced(
     int64_t num_values, const int16_t* def_levels, const int16_t* rep_levels,
     const uint8_t* valid_bits, int64_t valid_bits_offset, const T* values) {
   // We check for DataPage limits only after we have inserted the values. If a user
@@ -840,26 +949,63 @@ void TypedColumnWriter<DType>::WriteBatchSpaced(
 }
 
 template <typename DType>
-void TypedColumnWriter<DType>::WriteValues(int64_t num_values, const T* values) {
-  current_encoder_->Put(values, static_cast<int>(num_values));
+void TypedColumnWriterImpl<DType>::WriteValues(int64_t num_values, const T* values) {
+  dynamic_cast<ValueEncoderType*>(current_encoder_.get())
+      ->Put(values, static_cast<int>(num_values));
 }
 
 template <typename DType>
-void TypedColumnWriter<DType>::WriteValuesSpaced(int64_t num_values,
-                                                 const uint8_t* valid_bits,
-                                                 int64_t valid_bits_offset,
-                                                 const T* values) {
-  current_encoder_->PutSpaced(values, static_cast<int>(num_values), valid_bits,
-                              valid_bits_offset);
+void TypedColumnWriterImpl<DType>::WriteValuesSpaced(int64_t num_values,
+                                                     const uint8_t* valid_bits,
+                                                     int64_t valid_bits_offset,
+                                                     const T* values) {
+  dynamic_cast<ValueEncoderType*>(current_encoder_.get())
+      ->PutSpaced(values, static_cast<int>(num_values), valid_bits, valid_bits_offset);
 }
 
-template class PARQUET_TEMPLATE_EXPORT TypedColumnWriter<BooleanType>;
-template class PARQUET_TEMPLATE_EXPORT TypedColumnWriter<Int32Type>;
-template class PARQUET_TEMPLATE_EXPORT TypedColumnWriter<Int64Type>;
-template class PARQUET_TEMPLATE_EXPORT TypedColumnWriter<Int96Type>;
-template class PARQUET_TEMPLATE_EXPORT TypedColumnWriter<FloatType>;
-template class PARQUET_TEMPLATE_EXPORT TypedColumnWriter<DoubleType>;
-template class PARQUET_TEMPLATE_EXPORT TypedColumnWriter<ByteArrayType>;
-template class PARQUET_TEMPLATE_EXPORT TypedColumnWriter<FLBAType>;
+// ----------------------------------------------------------------------
+// Dynamic column writer constructor
+
+std::shared_ptr<ColumnWriter> ColumnWriter::Make(ColumnChunkMetaDataBuilder* metadata,
+                                                 std::unique_ptr<PageWriter> pager,
+                                                 const WriterProperties* properties) {
+  const ColumnDescriptor* descr = metadata->descr();
+  const bool use_dictionary = properties->dictionary_enabled(descr->path()) &&
+                              descr->physical_type() != Type::BOOLEAN;
+  Encoding::type encoding = properties->encoding(descr->path());
+  if (use_dictionary) {
+    encoding = properties->dictionary_index_encoding();
+  }
+  switch (descr->physical_type()) {
+    case Type::BOOLEAN:
+      return std::make_shared<TypedColumnWriterImpl<BooleanType>>(
+          metadata, std::move(pager), use_dictionary, encoding, properties);
+    case Type::INT32:
+      return std::make_shared<TypedColumnWriterImpl<Int32Type>>(
+          metadata, std::move(pager), use_dictionary, encoding, properties);
+    case Type::INT64:
+      return std::make_shared<TypedColumnWriterImpl<Int64Type>>(
+          metadata, std::move(pager), use_dictionary, encoding, properties);
+    case Type::INT96:
+      return std::make_shared<TypedColumnWriterImpl<Int96Type>>(
+          metadata, std::move(pager), use_dictionary, encoding, properties);
+    case Type::FLOAT:
+      return std::make_shared<TypedColumnWriterImpl<FloatType>>(
+          metadata, std::move(pager), use_dictionary, encoding, properties);
+    case Type::DOUBLE:
+      return std::make_shared<TypedColumnWriterImpl<DoubleType>>(
+          metadata, std::move(pager), use_dictionary, encoding, properties);
+    case Type::BYTE_ARRAY:
+      return std::make_shared<TypedColumnWriterImpl<ByteArrayType>>(
+          metadata, std::move(pager), use_dictionary, encoding, properties);
+    case Type::FIXED_LEN_BYTE_ARRAY:
+      return std::make_shared<TypedColumnWriterImpl<FLBAType>>(
+          metadata, std::move(pager), use_dictionary, encoding, properties);
+    default:
+      ParquetException::NYI("type reader not implemented");
+  }
+  // Unreachable code, but supress compiler warning
+  return std::shared_ptr<ColumnWriter>(nullptr);
+}
 
 }  // namespace parquet

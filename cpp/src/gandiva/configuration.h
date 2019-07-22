@@ -15,55 +15,39 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#ifndef GANDIVA_CONFIGURATION_H
-#define GANDIVA_CONFIGURATION_H
+#pragma once
 
 #include <memory>
 #include <string>
 
 #include "arrow/status.h"
 
-namespace gandiva {
+#include "gandiva/visibility.h"
 
-extern const char kByteCodeFilePath[];
+namespace gandiva {
 
 class ConfigurationBuilder;
 /// \brief runtime config for gandiva
 ///
 /// It contains elements to customize gandiva execution
 /// at run time.
-class Configuration {
+class GANDIVA_EXPORT Configuration {
  public:
   friend class ConfigurationBuilder;
-
-  const std::string& byte_code_file_path() const { return byte_code_file_path_; }
 
   std::size_t Hash() const;
   bool operator==(const Configuration& other) const;
   bool operator!=(const Configuration& other) const;
-
- private:
-  explicit Configuration(const std::string& byte_code_file_path)
-      : byte_code_file_path_(byte_code_file_path) {}
-
-  const std::string byte_code_file_path_;
 };
 
 /// \brief configuration builder for gandiva
 ///
 /// Provides a default configuration and convenience methods
 /// to override specific values and build a custom instance
-class ConfigurationBuilder {
+class GANDIVA_EXPORT ConfigurationBuilder {
  public:
-  ConfigurationBuilder() : byte_code_file_path_(kByteCodeFilePath) {}
-
-  ConfigurationBuilder& set_byte_code_file_path(const std::string& byte_code_file_path) {
-    byte_code_file_path_ = byte_code_file_path;
-    return *this;
-  }
-
   std::shared_ptr<Configuration> build() {
-    std::shared_ptr<Configuration> configuration(new Configuration(byte_code_file_path_));
+    std::shared_ptr<Configuration> configuration(new Configuration());
     return configuration;
   }
 
@@ -72,10 +56,8 @@ class ConfigurationBuilder {
   }
 
  private:
-  std::string byte_code_file_path_;
-
   static std::shared_ptr<Configuration> InitDefaultConfig() {
-    std::shared_ptr<Configuration> configuration(new Configuration(kByteCodeFilePath));
+    std::shared_ptr<Configuration> configuration(new Configuration());
     return configuration;
   }
 
@@ -83,4 +65,3 @@ class ConfigurationBuilder {
 };
 
 }  // namespace gandiva
-#endif  // GANDIVA_CONFIGURATION_H

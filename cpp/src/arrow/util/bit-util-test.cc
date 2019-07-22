@@ -15,13 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#include <algorithm>
+#include <array>
 #include <climits>
 #include <cstdint>
 #include <cstring>
 #include <functional>
 #include <limits>
 #include <memory>
-#include <valarray>
+#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -30,8 +32,8 @@
 
 #include "arrow/buffer.h"
 #include "arrow/memory_pool.h"
-#include "arrow/test-common.h"
-#include "arrow/test-util.h"
+#include "arrow/testing/gtest_common.h"
+#include "arrow/testing/gtest_util.h"
 #include "arrow/util/bit-stream-utils.h"
 #include "arrow/util/bit-util.h"
 #include "arrow/util/cpu-info.h"
@@ -41,6 +43,7 @@ namespace arrow {
 using internal::BitmapAnd;
 using internal::BitmapOr;
 using internal::BitmapXor;
+using internal::BitsetStack;
 using internal::CopyBitmap;
 using internal::CountSetBits;
 using internal::InvertBitmap;
@@ -167,33 +170,40 @@ TEST(BitmapReader, DoesNotReadOutOfBounds) {
 }
 
 TEST(BitmapWriter, NormalOperation) {
-  {
-    uint8_t bitmap[] = {0, 0, 0, 0};
-    auto writer = internal::BitmapWriter(bitmap, 0, 12);
-    WriteVectorToWriter(writer, {0, 1, 1, 0, 1, 1, 0, 0, 0, 1, 0, 1});
-    //                      {0b00110110, 0b1010, 0, 0}
-    ASSERT_BYTES_EQ(bitmap, {0x36, 0x0a, 0, 0});
-  }
-  {
-    uint8_t bitmap[] = {0xff, 0xff, 0xff, 0xff};
-    auto writer = internal::BitmapWriter(bitmap, 0, 12);
-    WriteVectorToWriter(writer, {0, 1, 1, 0, 1, 1, 0, 0, 0, 1, 0, 1});
-    //                      {0b00110110, 0b11111010, 0xff, 0xff}
-    ASSERT_BYTES_EQ(bitmap, {0x36, 0xfa, 0xff, 0xff});
-  }
-  {
-    uint8_t bitmap[] = {0, 0, 0, 0};
-    auto writer = internal::BitmapWriter(bitmap, 3, 12);
-    WriteVectorToWriter(writer, {0, 1, 1, 0, 1, 1, 0, 0, 0, 1, 0, 1});
-    //                      {0b10110000, 0b01010001, 0, 0}
-    ASSERT_BYTES_EQ(bitmap, {0xb0, 0x51, 0, 0});
-  }
-  {
-    uint8_t bitmap[] = {0, 0, 0, 0};
-    auto writer = internal::BitmapWriter(bitmap, 20, 12);
-    WriteVectorToWriter(writer, {0, 1, 1, 0, 1, 1, 0, 0, 0, 1, 0, 1});
-    //                      {0, 0, 0b01100000, 0b10100011}
-    ASSERT_BYTES_EQ(bitmap, {0, 0, 0x60, 0xa3});
+  for (const auto fill_byte_int : {0x00, 0xff}) {
+    const uint8_t fill_byte = static_cast<uint8_t>(fill_byte_int);
+    {
+      uint8_t bitmap[] = {fill_byte, fill_byte, fill_byte, fill_byte};
+      auto writer = internal::BitmapWriter(bitmap, 0, 12);
+      WriteVectorToWriter(writer, {0, 1, 1, 0, 1, 1, 0, 0, 0, 1, 0, 1});
+      //                      {0b00110110, 0b....1010, ........, ........}
+      ASSERT_BYTES_EQ(bitmap, {0x36, static_cast<uint8_t>(0x0a | (fill_byte & 0xf0)),
+                               fill_byte, fill_byte});
+    }
+    {
+      uint8_t bitmap[] = {fill_byte, fill_byte, fill_byte, fill_byte};
+      auto writer = internal::BitmapWriter(bitmap, 3, 12);
+      WriteVectorToWriter(writer, {0, 1, 1, 0, 1, 1, 0, 0, 0, 1, 0, 1});
+      //                      {0b10110..., 0b.1010001, ........, ........}
+      ASSERT_BYTES_EQ(bitmap, {static_cast<uint8_t>(0xb0 | (fill_byte & 0x07)),
+                               static_cast<uint8_t>(0x51 | (fill_byte & 0x80)), fill_byte,
+                               fill_byte});
+    }
+    {
+      uint8_t bitmap[] = {fill_byte, fill_byte, fill_byte, fill_byte};
+      auto writer = internal::BitmapWriter(bitmap, 20, 12);
+      WriteVectorToWriter(writer, {0, 1, 1, 0, 1, 1, 0, 0, 0, 1, 0, 1});
+      //                      {........, ........, 0b0110...., 0b10100011}
+      ASSERT_BYTES_EQ(bitmap, {fill_byte, fill_byte,
+                               static_cast<uint8_t>(0x60 | (fill_byte & 0x0f)), 0xa3});
+    }
+    // 0-length writes
+    for (int64_t pos = 0; pos < 32; ++pos) {
+      uint8_t bitmap[] = {fill_byte, fill_byte, fill_byte, fill_byte};
+      auto writer = internal::BitmapWriter(bitmap, pos, 0);
+      WriteVectorToWriter(writer, {});
+      ASSERT_BYTES_EQ(bitmap, {fill_byte, fill_byte, fill_byte, fill_byte});
+    }
   }
 }
 
@@ -267,12 +277,20 @@ TEST(FirstTimeBitmapWriter, NormalOperation) {
     {
       uint8_t bitmap[] = {fill_byte, fill_byte, fill_byte, fill_byte};
       {
+        auto writer = internal::FirstTimeBitmapWriter(bitmap, 4, 0);
+        WriteVectorToWriter(writer, {});
+      }
+      {
         auto writer = internal::FirstTimeBitmapWriter(bitmap, 4, 6);
         WriteVectorToWriter(writer, {0, 1, 1, 0, 1, 1});
       }
       {
         auto writer = internal::FirstTimeBitmapWriter(bitmap, 10, 3);
         WriteVectorToWriter(writer, {0, 0, 0});
+      }
+      {
+        auto writer = internal::FirstTimeBitmapWriter(bitmap, 13, 0);
+        WriteVectorToWriter(writer, {});
       }
       {
         auto writer = internal::FirstTimeBitmapWriter(bitmap, 13, 3);
@@ -319,8 +337,8 @@ TYPED_TEST(TestGenerateBits, NormalOperation) {
   for (const int64_t start_offset : start_offsets) {
     for (const int64_t length : lengths) {
       for (const uint8_t fill_byte : fill_bytes) {
-        uint8_t bitmap[kSourceSize];
-        memset(bitmap, fill_byte, kSourceSize);
+        uint8_t bitmap[kSourceSize + 1];
+        memset(bitmap, fill_byte, kSourceSize + 1);
         // First call GenerateBits
         {
           int64_t ncalled = 0;
@@ -344,7 +362,7 @@ TYPED_TEST(TestGenerateBits, NormalOperation) {
             result_reader.Next();
           }
         }
-        // Check bits preceding and following generated contents weren't clobbered
+        // Check bits preceding generated contents weren't clobbered
         {
           internal::BitmapReader reader_before(bitmap, 0, start_offset);
           for (int64_t i = 0; i < start_offset; ++i) {
@@ -352,6 +370,125 @@ TYPED_TEST(TestGenerateBits, NormalOperation) {
                 << "mismatch at preceding bit #" << start_offset - i;
           }
         }
+        // Check the byte following generated contents wasn't clobbered
+        auto byte_after = bitmap[BitUtil::CeilDiv(start_offset + length, 8)];
+        ASSERT_EQ(byte_after, fill_byte);
+      }
+    }
+  }
+}
+
+// Tests for VisitBits and VisitBitsUnrolled. Based on the tests for GenerateBits and
+// GenerateBitsUnrolled.
+struct VisitBitsFunctor {
+  void operator()(const uint8_t* bitmap, int64_t start_offset, int64_t length,
+                  bool* destination) {
+    auto writer = [&](const bool& bit_value) { *destination++ = bit_value; };
+    return internal::VisitBits(bitmap, start_offset, length, writer);
+  }
+};
+
+struct VisitBitsUnrolledFunctor {
+  void operator()(const uint8_t* bitmap, int64_t start_offset, int64_t length,
+                  bool* destination) {
+    auto writer = [&](const bool& bit_value) { *destination++ = bit_value; };
+    return internal::VisitBitsUnrolled(bitmap, start_offset, length, writer);
+  }
+};
+
+/* Define a typed test class with some utility members. */
+template <typename T>
+class TestVisitBits : public ::testing::Test {
+ protected:
+  // The bitmap size that will be used throughout the VisitBits tests.
+  static const int64_t kBitmapSizeInBytes = 32;
+
+  // Typedefs for the source and expected destination types in this test.
+  using PackedBitmapType = std::array<uint8_t, kBitmapSizeInBytes>;
+  using UnpackedBitmapType = std::array<bool, 8 * kBitmapSizeInBytes>;
+
+  // Helper functions to generate the source bitmap and expected destination
+  // arrays.
+  static PackedBitmapType generate_packed_bitmap() {
+    PackedBitmapType bitmap;
+    // Assign random values into the source array.
+    random_bytes(kBitmapSizeInBytes, 0, bitmap.data());
+    return bitmap;
+  }
+
+  static UnpackedBitmapType generate_unpacked_bitmap(PackedBitmapType bitmap) {
+    // Use a BitmapReader (tested earlier) to populate the expected
+    // unpacked bitmap.
+    UnpackedBitmapType result;
+    internal::BitmapReader reader(bitmap.data(), 0, 8 * kBitmapSizeInBytes);
+    for (int64_t index = 0; index < 8 * kBitmapSizeInBytes; ++index) {
+      result[index] = reader.IsSet();
+      reader.Next();
+    }
+    return result;
+  }
+
+  // A pre-defined packed bitmap for use in test cases.
+  const PackedBitmapType packed_bitmap_;
+
+  // The expected unpacked bitmap that would be generated if each bit in
+  // the entire source bitmap was correctly unpacked to bytes.
+  const UnpackedBitmapType expected_unpacked_bitmap_;
+
+  // Define a test constructor that populates the packed bitmap and the expected
+  // unpacked bitmap.
+  TestVisitBits()
+      : packed_bitmap_(generate_packed_bitmap()),
+        expected_unpacked_bitmap_(generate_unpacked_bitmap(packed_bitmap_)) {}
+};
+
+using VisitBitsTestTypes = ::testing::Types<VisitBitsFunctor, VisitBitsUnrolledFunctor>;
+TYPED_TEST_CASE(TestVisitBits, VisitBitsTestTypes);
+
+/* Test bit-unpacking when reading less than eight bits from the input */
+TYPED_TEST(TestVisitBits, NormalOperation) {
+  typename TestFixture::UnpackedBitmapType unpacked_bitmap;
+  const int64_t start_offsets[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 21, 31, 32};
+  const int64_t lengths[] = {0,  1,  2,  3,  4,   5,   6,   7,   8,   9,   12,  16,
+                             17, 21, 31, 32, 100, 201, 202, 203, 204, 205, 206, 207};
+  const bool fill_values[] = {false, true};
+
+  for (const bool fill_value : fill_values) {
+    auto is_unmodified = [=](bool value) -> bool { return value == fill_value; };
+
+    for (const int64_t start_offset : start_offsets) {
+      for (const int64_t length : lengths) {
+        std::string failure_info = std::string("fill value: ") +
+                                   std::to_string(fill_value) +
+                                   ", start offset: " + std::to_string(start_offset) +
+                                   ", length: " + std::to_string(length);
+        // Pre-fill the unpacked_bitmap array.
+        unpacked_bitmap.fill(fill_value);
+
+        // Attempt to read bits from the input bitmap into the unpacked_bitmap bitmap.
+        using VisitBitsFunctor = TypeParam;
+        VisitBitsFunctor()(this->packed_bitmap_.data(), start_offset, length,
+                           unpacked_bitmap.data() + start_offset);
+
+        // Verify that the correct values have been written in the [start_offset,
+        // start_offset+length) range.
+        EXPECT_TRUE(std::equal(unpacked_bitmap.begin() + start_offset,
+                               unpacked_bitmap.begin() + start_offset + length,
+                               this->expected_unpacked_bitmap_.begin() + start_offset))
+            << "Invalid bytes unpacked when using " << failure_info;
+
+        // Verify that the unpacked_bitmap array has not changed before or after
+        // the [start_offset, start_offset+length) range.
+        EXPECT_TRUE(std::all_of(unpacked_bitmap.begin(),
+                                unpacked_bitmap.begin() + start_offset, is_unmodified))
+            << "Unexpected modification to unpacked_bitmap array before written range "
+               "when using "
+            << failure_info;
+        EXPECT_TRUE(std::all_of(unpacked_bitmap.begin() + start_offset + length,
+                                unpacked_bitmap.end(), is_unmodified))
+            << "Unexpected modification to unpacked_bitmap array after written range "
+               "when using "
+            << failure_info;
       }
     }
   }
@@ -361,6 +498,10 @@ struct BitmapOperation {
   virtual Status Call(MemoryPool* pool, const uint8_t* left, int64_t left_offset,
                       const uint8_t* right, int64_t right_offset, int64_t length,
                       int64_t out_offset, std::shared_ptr<Buffer>* out_buffer) const = 0;
+
+  virtual Status Call(const uint8_t* left, int64_t left_offset, const uint8_t* right,
+                      int64_t right_offset, int64_t length, int64_t out_offset,
+                      uint8_t* out_buffer) const = 0;
 
   virtual ~BitmapOperation() = default;
 };
@@ -372,6 +513,13 @@ struct BitmapAndOp : public BitmapOperation {
     return BitmapAnd(pool, left, left_offset, right, right_offset, length, out_offset,
                      out_buffer);
   }
+
+  Status Call(const uint8_t* left, int64_t left_offset, const uint8_t* right,
+              int64_t right_offset, int64_t length, int64_t out_offset,
+              uint8_t* out_buffer) const override {
+    BitmapAnd(left, left_offset, right, right_offset, length, out_offset, out_buffer);
+    return Status::OK();
+  }
 };
 
 struct BitmapOrOp : public BitmapOperation {
@@ -381,6 +529,13 @@ struct BitmapOrOp : public BitmapOperation {
     return BitmapOr(pool, left, left_offset, right, right_offset, length, out_offset,
                     out_buffer);
   }
+
+  Status Call(const uint8_t* left, int64_t left_offset, const uint8_t* right,
+              int64_t right_offset, int64_t length, int64_t out_offset,
+              uint8_t* out_buffer) const override {
+    BitmapOr(left, left_offset, right, right_offset, length, out_offset, out_buffer);
+    return Status::OK();
+  }
 };
 
 struct BitmapXorOp : public BitmapOperation {
@@ -389,6 +544,13 @@ struct BitmapXorOp : public BitmapOperation {
               int64_t out_offset, std::shared_ptr<Buffer>* out_buffer) const override {
     return BitmapXor(pool, left, left_offset, right, right_offset, length, out_offset,
                      out_buffer);
+  }
+
+  Status Call(const uint8_t* left, int64_t left_offset, const uint8_t* right,
+              int64_t right_offset, int64_t length, int64_t out_offset,
+              uint8_t* out_buffer) const override {
+    BitmapXor(left, left_offset, right, right_offset, length, out_offset, out_buffer);
+    return Status::OK();
   }
 };
 
@@ -409,6 +571,13 @@ class BitmapOp : public TestBase {
                             right->mutable_data(), right_offset, length, out_offset,
                             &out));
           auto reader = internal::BitmapReader(out->mutable_data(), out_offset, length);
+          ASSERT_READER_VALUES(reader, result_bits);
+
+          // Clear out buffer and try non-allocating version
+          std::memset(out->mutable_data(), 0, out->size());
+          ASSERT_OK(op.Call(left->mutable_data(), left_offset, right->mutable_data(),
+                            right_offset, length, out_offset, out->mutable_data()));
+          reader = internal::BitmapReader(out->mutable_data(), out_offset, length);
           ASSERT_READER_VALUES(reader, result_bits);
         }
       }
@@ -433,6 +602,13 @@ class BitmapOp : public TestBase {
                             right->mutable_data(), right_offset, length, out_offset,
                             &out));
           auto reader = internal::BitmapReader(out->mutable_data(), out_offset, length);
+          ASSERT_READER_VALUES(reader, result_bits);
+
+          // Clear out buffer and try non-allocating version
+          std::memset(out->mutable_data(), 0, out->size());
+          ASSERT_OK(op.Call(left->mutable_data(), left_offset, right->mutable_data(),
+                            right_offset, length, out_offset, out->mutable_data()));
+          reader = internal::BitmapReader(out->mutable_data(), out_offset, length);
           ASSERT_READER_VALUES(reader, result_bits);
         }
       }
@@ -496,6 +672,43 @@ TEST(BitUtilTests, TestCountSetBits) {
     int64_t expected = SlowCountBits(buffer, offset, num_bits - offset);
 
     ASSERT_EQ(expected, result);
+  }
+}
+
+TEST(BitUtilTests, TestSetBitsTo) {
+  using BitUtil::SetBitsTo;
+  for (const auto fill_byte_int : {0x00, 0xff}) {
+    const uint8_t fill_byte = static_cast<uint8_t>(fill_byte_int);
+    {
+      // test set within a byte
+      uint8_t bitmap[] = {fill_byte, fill_byte, fill_byte, fill_byte};
+      SetBitsTo(bitmap, 2, 2, true);
+      SetBitsTo(bitmap, 4, 2, false);
+      ASSERT_BYTES_EQ(bitmap, {static_cast<uint8_t>((fill_byte & ~0x3C) | 0xC)});
+    }
+    {
+      // test straddling a single byte boundary
+      uint8_t bitmap[] = {fill_byte, fill_byte, fill_byte, fill_byte};
+      SetBitsTo(bitmap, 4, 7, true);
+      SetBitsTo(bitmap, 11, 7, false);
+      ASSERT_BYTES_EQ(bitmap, {static_cast<uint8_t>((fill_byte & 0xF) | 0xF0), 0x7,
+                               static_cast<uint8_t>(fill_byte & ~0x3)});
+    }
+    {
+      // test byte aligned end
+      uint8_t bitmap[] = {fill_byte, fill_byte, fill_byte, fill_byte};
+      SetBitsTo(bitmap, 4, 4, true);
+      SetBitsTo(bitmap, 8, 8, false);
+      ASSERT_BYTES_EQ(bitmap,
+                      {static_cast<uint8_t>((fill_byte & 0xF) | 0xF0), 0x00, fill_byte});
+    }
+    {
+      // test byte aligned end, multiple bytes
+      uint8_t bitmap[] = {fill_byte, fill_byte, fill_byte, fill_byte};
+      SetBitsTo(bitmap, 0, 24, false);
+      uint8_t false_byte = static_cast<uint8_t>(0);
+      ASSERT_BYTES_EQ(bitmap, {false_byte, false_byte, false_byte, fill_byte});
+    }
   }
 }
 
@@ -637,6 +850,35 @@ TEST(BitUtil, RoundUp) {
   EXPECT_EQ(BitUtil::RoundUp(100000000000, 10000000000), 100000000000);
 }
 
+TEST(BitUtil, RoundDown) {
+  EXPECT_EQ(BitUtil::RoundDown(0, 1), 0);
+  EXPECT_EQ(BitUtil::RoundDown(1, 1), 1);
+  EXPECT_EQ(BitUtil::RoundDown(1, 2), 0);
+  EXPECT_EQ(BitUtil::RoundDown(6, 2), 6);
+  EXPECT_EQ(BitUtil::RoundDown(5, 7), 0);
+  EXPECT_EQ(BitUtil::RoundDown(10, 7), 7);
+  EXPECT_EQ(BitUtil::RoundDown(7, 3), 6);
+  EXPECT_EQ(BitUtil::RoundDown(9, 9), 9);
+  EXPECT_EQ(BitUtil::RoundDown(10000000001, 10), 10000000000);
+  EXPECT_EQ(BitUtil::RoundDown(10, 10000000000), 0);
+  EXPECT_EQ(BitUtil::RoundDown(100000000000, 10000000000), 100000000000);
+
+  for (int i = 0; i < 100; i++) {
+    for (int j = 1; j < 100; j++) {
+      EXPECT_EQ(BitUtil::RoundDown(i, j), i - (i % j));
+    }
+  }
+}
+
+TEST(BitUtil, CoveringBytes) {
+  EXPECT_EQ(BitUtil::CoveringBytes(0, 8), 1);
+  EXPECT_EQ(BitUtil::CoveringBytes(0, 9), 2);
+  EXPECT_EQ(BitUtil::CoveringBytes(1, 7), 1);
+  EXPECT_EQ(BitUtil::CoveringBytes(1, 8), 2);
+  EXPECT_EQ(BitUtil::CoveringBytes(2, 19), 3);
+  EXPECT_EQ(BitUtil::CoveringBytes(7, 18), 4);
+}
+
 TEST(BitUtil, TrailingBits) {
   EXPECT_EQ(BitUtil::TrailingBits(BOOST_BINARY(1 1 1 1 1 1 1 1), 0), 0);
   EXPECT_EQ(BitUtil::TrailingBits(BOOST_BINARY(1 1 1 1 1 1 1 1), 1), 1);
@@ -734,6 +976,30 @@ TEST(BitUtil, CountLeadingZeros) {
   EXPECT_EQ(BitUtil::CountLeadingZeros(U64(ULLONG_MAX)), 0);
 }
 
+TEST(BitUtil, CountTrailingZeros) {
+  EXPECT_EQ(BitUtil::CountTrailingZeros(U32(0)), 32);
+  EXPECT_EQ(BitUtil::CountTrailingZeros(U32(1) << 31), 31);
+  EXPECT_EQ(BitUtil::CountTrailingZeros(U32(1) << 30), 30);
+  EXPECT_EQ(BitUtil::CountTrailingZeros(U32(1) << 29), 29);
+  EXPECT_EQ(BitUtil::CountTrailingZeros(U32(1) << 28), 28);
+  EXPECT_EQ(BitUtil::CountTrailingZeros(U32(8)), 3);
+  EXPECT_EQ(BitUtil::CountTrailingZeros(U32(4)), 2);
+  EXPECT_EQ(BitUtil::CountTrailingZeros(U32(2)), 1);
+  EXPECT_EQ(BitUtil::CountTrailingZeros(U32(1)), 0);
+  EXPECT_EQ(BitUtil::CountTrailingZeros(U32(ULONG_MAX)), 0);
+
+  EXPECT_EQ(BitUtil::CountTrailingZeros(U64(0)), 64);
+  EXPECT_EQ(BitUtil::CountTrailingZeros(U64(1) << 63), 63);
+  EXPECT_EQ(BitUtil::CountTrailingZeros(U64(1) << 62), 62);
+  EXPECT_EQ(BitUtil::CountTrailingZeros(U64(1) << 61), 61);
+  EXPECT_EQ(BitUtil::CountTrailingZeros(U64(1) << 60), 60);
+  EXPECT_EQ(BitUtil::CountTrailingZeros(U64(8)), 3);
+  EXPECT_EQ(BitUtil::CountTrailingZeros(U64(4)), 2);
+  EXPECT_EQ(BitUtil::CountTrailingZeros(U64(2)), 1);
+  EXPECT_EQ(BitUtil::CountTrailingZeros(U64(1)), 0);
+  EXPECT_EQ(BitUtil::CountTrailingZeros(U64(ULLONG_MAX)), 0);
+}
+
 #undef U32
 #undef U64
 
@@ -756,7 +1022,9 @@ static void TestZigZag(int32_t v) {
 TEST(BitStreamUtil, ZigZag) {
   TestZigZag(0);
   TestZigZag(1);
+  TestZigZag(1234);
   TestZigZag(-1);
+  TestZigZag(-1234);
   TestZigZag(std::numeric_limits<int32_t>::max());
   TestZigZag(-std::numeric_limits<int32_t>::max());
 }
@@ -791,6 +1059,27 @@ TEST(BitUtil, RoundTripBigEndianTest) {
 
   uint64_t from_big_endian = BitUtil::FromBigEndian(big_endian_result);
   ASSERT_EQ(value, from_big_endian);
+}
+
+TEST(BitUtil, BitsetStack) {
+  BitsetStack stack;
+  ASSERT_EQ(stack.TopSize(), 0);
+  stack.Push(3, false);
+  ASSERT_EQ(stack.TopSize(), 3);
+  stack[1] = true;
+  stack.Push(5, true);
+  ASSERT_EQ(stack.TopSize(), 5);
+  stack[1] = false;
+  for (int i = 0; i != 5; ++i) {
+    ASSERT_EQ(stack[i], i != 1);
+  }
+  stack.Pop();
+  ASSERT_EQ(stack.TopSize(), 3);
+  for (int i = 0; i != 3; ++i) {
+    ASSERT_EQ(stack[i], i == 1);
+  }
+  stack.Pop();
+  ASSERT_EQ(stack.TopSize(), 0);
 }
 
 }  // namespace arrow

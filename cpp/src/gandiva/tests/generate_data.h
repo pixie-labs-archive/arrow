@@ -19,6 +19,8 @@
 #include <random>
 #include <string>
 
+#include "arrow/util/decimal.h"
+
 #ifndef GANDIVA_GENERATE_DATA_H
 #define GANDIVA_GENERATE_DATA_H
 
@@ -37,8 +39,11 @@ class Random {
   explicit Random(uint32_t seed = 100) : seed_(seed) {}
 
   // This is 3 times faster than random_device
+#ifndef _MSC_VER
   int32_t next() { return rand_r(&seed_); }
-  // int32_t next() { return random_dev_(); }
+#else
+  int32_t next() { return random_dev_(); }
+#endif
 
  private:
   uint32_t seed_;
@@ -76,6 +81,24 @@ class Int64DataGenerator : public DataGenerator<int64_t> {
   int64_t GenerateData() { return random_.next(); }
 
  protected:
+  Random random_;
+};
+
+class Decimal128DataGenerator : public DataGenerator<arrow::Decimal128> {
+ public:
+  explicit Decimal128DataGenerator(bool large) : large_(large) {}
+
+  arrow::Decimal128 GenerateData() {
+    uint64_t low = random_.next();
+    int64_t high = random_.next();
+    if (large_) {
+      high += (1ull << 62);
+    }
+    return arrow::Decimal128(high, low);
+  }
+
+ protected:
+  bool large_;
   Random random_;
 };
 

@@ -70,7 +70,7 @@ constexpr int kMaxNestingDepth = 64;
 /// \brief An IPC message including metadata and body
 class ARROW_EXPORT Message {
  public:
-  enum Type { NONE, SCHEMA, DICTIONARY_BATCH, RECORD_BATCH, TENSOR };
+  enum Type { NONE, SCHEMA, DICTIONARY_BATCH, RECORD_BATCH, TENSOR, SPARSE_TENSOR };
 
   /// \brief Construct message, but do not validate
   ///
@@ -152,6 +152,9 @@ class ARROW_EXPORT Message {
 
   /// \brief Return true if the Message metadata passes Flatbuffer validation
   bool Verify() const;
+
+  /// \brief Whether a given message type needs a body.
+  static bool HasBody(Type type) { return type != NONE && type != SCHEMA; }
 
  private:
   // Hide serialization details from user API

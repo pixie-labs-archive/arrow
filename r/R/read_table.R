@@ -36,7 +36,7 @@
 #' @return
 #'
 #'  - `read_table` returns an [arrow::Table][arrow__Table]
-#'  - `read_arrow` returns a [tibble::tibble()]
+#'  - `read_arrow` returns a `data.frame`
 #'
 #' @details
 #'
@@ -67,20 +67,22 @@ read_table.character <- function(stream){
 
 #' @export
 read_table.fs_path <- function(stream) {
-  stream <- close_on_exit(ReadableFile(stream))
-  batch_reader <- close_on_exit(RecordBatchFileReader(stream))
+  stream <- ReadableFile(stream)
+  on.exit(stream$close())
+  batch_reader <- RecordBatchFileReader(stream)
   shared_ptr(`arrow::Table`, Table__from_RecordBatchFileReader(batch_reader))
 }
 
 #' @export
 `read_table.raw` <- function(stream) {
-  stream <- close_on_exit(BufferReader(stream))
-  batch_reader <- close_on_exit(RecordBatchStreamReader(stream))
+  stream <- BufferReader(stream)
+  on.exit(stream$close())
+  batch_reader <- RecordBatchStreamReader(stream)
   shared_ptr(`arrow::Table`, Table__from_RecordBatchStreamReader(batch_reader))
 }
 
 #' @rdname read_table
 #' @export
 read_arrow <- function(stream){
-  as_tibble(read_table(stream))
+  as.data.frame(read_table(stream))
 }

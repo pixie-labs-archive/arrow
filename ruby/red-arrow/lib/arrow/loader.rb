@@ -28,11 +28,13 @@ module Arrow
     private
     def post_load(repository, namespace)
       require_libraries
+      require_extension_library
     end
 
     def require_libraries
       require "arrow/array"
       require "arrow/array-builder"
+      require "arrow/binary-array-builder"
       require "arrow/chunked-array"
       require "arrow/column"
       require "arrow/compression-type"
@@ -43,6 +45,7 @@ module Arrow
       require "arrow/date32-array-builder"
       require "arrow/date64-array"
       require "arrow/date64-array-builder"
+      require "arrow/decimal128"
       require "arrow/decimal128-array-builder"
       require "arrow/decimal128-data-type"
       require "arrow/dense-union-data-type"
@@ -51,9 +54,11 @@ module Arrow
       require "arrow/file-output-stream"
       require "arrow/list-array-builder"
       require "arrow/list-data-type"
+      require "arrow/null-array-builder"
       require "arrow/path-extension"
       require "arrow/record"
       require "arrow/record-batch"
+      require "arrow/record-batch-builder"
       require "arrow/record-batch-file-reader"
       require "arrow/record-batch-stream-reader"
       require "arrow/rolling-window"
@@ -78,6 +83,10 @@ module Arrow
       require "arrow/writable"
     end
 
+    def require_extension_library
+      require "arrow.so"
+    end
+
     def load_object_info(info)
       super
 
@@ -89,6 +98,13 @@ module Arrow
 
     def load_method_info(info, klass, method_name)
       case klass.name
+      when /Builder\z/
+        case method_name
+        when "append"
+          return
+        else
+          super
+        end
       when "Arrow::StringArray"
         case method_name
         when "get_value"

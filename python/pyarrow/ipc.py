@@ -17,6 +17,8 @@
 
 # Arrow file and stream reader/writer classes, and other messaging tools
 
+from __future__ import absolute_import
+
 import pyarrow as pa
 
 from pyarrow.lib import (Message, MessageReader,  # noqa
@@ -45,7 +47,7 @@ class _ReadPandasOption(object):
         return table.to_pandas(**options)
 
 
-class RecordBatchStreamReader(lib._RecordBatchReader, _ReadPandasOption):
+class RecordBatchStreamReader(lib._RecordBatchStreamReader, _ReadPandasOption):
     """
     Reader for the Arrow streaming binary format
 
@@ -58,7 +60,7 @@ class RecordBatchStreamReader(lib._RecordBatchReader, _ReadPandasOption):
         self._open(source)
 
 
-class RecordBatchStreamWriter(lib._RecordBatchWriter):
+class RecordBatchStreamWriter(lib._RecordBatchStreamWriter):
     """
     Writer for the Arrow streaming binary format
 
@@ -142,7 +144,7 @@ def open_file(source, footer_offset=None):
     return RecordBatchFileReader(source, footer_offset=footer_offset)
 
 
-def serialize_pandas(df, nthreads=None, preserve_index=True):
+def serialize_pandas(df, nthreads=None, preserve_index=None):
     """Serialize a pandas DataFrame into a buffer protocol compatible object.
 
     Parameters
@@ -150,9 +152,11 @@ def serialize_pandas(df, nthreads=None, preserve_index=True):
     df : pandas.DataFrame
     nthreads : int, default None
         Number of threads to use for conversion to Arrow, default all CPUs
-    preserve_index : boolean, default True
-        If True, preserve the pandas index data, otherwise the result will have
-        a default RangeIndex
+    preserve_index : boolean, default None
+        The default of None will store the index as a column, except for
+        RangeIndex which is stored as metadata only. If True, always
+        preserve the pandas index data as a column. If False, no index
+        information is saved and the result will have a default RangeIndex.
 
     Returns
     -------

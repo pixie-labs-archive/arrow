@@ -18,3 +18,8 @@
 # conda package dependencies specific to Unix-like environments (Linux and macOS)
 
 autoconf
+ccache
+orc
+pkg-config
+rsync
+valgrind

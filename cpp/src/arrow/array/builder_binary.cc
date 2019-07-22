@@ -22,7 +22,6 @@
 #include <cstdint>
 #include <cstring>
 #include <numeric>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -50,11 +49,15 @@ BinaryBuilder::BinaryBuilder(const std::shared_ptr<DataType>& type, MemoryPool* 
 BinaryBuilder::BinaryBuilder(MemoryPool* pool) : BinaryBuilder(binary(), pool) {}
 
 Status BinaryBuilder::Resize(int64_t capacity) {
-  DCHECK_LE(capacity, kListMaximumElements);
+  if (capacity > kListMaximumElements) {
+    return Status::CapacityError(
+        "BinaryBuilder cannot reserve space for more then 2^31 - 1 child elements, got ",
+        capacity);
+  }
   RETURN_NOT_OK(CheckCapacity(capacity, capacity_));
 
   // one more then requested for offsets
-  RETURN_NOT_OK(offsets_builder_.Resize((capacity + 1) * sizeof(int32_t)));
+  RETURN_NOT_OK(offsets_builder_.Resize(capacity + 1));
   return ArrayBuilder::Resize(capacity);
 }
 
@@ -78,12 +81,13 @@ Status BinaryBuilder::FinishInternal(std::shared_ptr<ArrayData>* out) {
   RETURN_NOT_OK(AppendNextOffset());
 
   // These buffers' padding zeroed by BufferBuilder
-  std::shared_ptr<Buffer> offsets, value_data;
+  std::shared_ptr<Buffer> offsets, value_data, null_bitmap;
   RETURN_NOT_OK(offsets_builder_.Finish(&offsets));
   RETURN_NOT_OK(value_data_builder_.Finish(&value_data));
+  RETURN_NOT_OK(null_bitmap_builder_.Finish(&null_bitmap));
 
-  *out = ArrayData::Make(type_, length_, {null_bitmap_, offsets, value_data}, null_count_,
-                         0);
+  *out =
+      ArrayData::Make(type_, length_, {null_bitmap, offsets, value_data}, null_count_, 0);
   Reset();
   return Status::OK();
 }
@@ -131,17 +135,17 @@ Status StringBuilder::AppendValues(const std::vector<std::string>& values,
 
   if (valid_bytes) {
     for (std::size_t i = 0; i < values.size(); ++i) {
-      RETURN_NOT_OK(AppendNextOffset());
+      UnsafeAppendNextOffset();
       if (valid_bytes[i]) {
-        RETURN_NOT_OK(value_data_builder_.Append(
-            reinterpret_cast<const uint8_t*>(values[i].data()), values[i].size()));
+        value_data_builder_.UnsafeAppend(
+            reinterpret_cast<const uint8_t*>(values[i].data()), values[i].size());
       }
     }
   } else {
     for (std::size_t i = 0; i < values.size(); ++i) {
-      RETURN_NOT_OK(AppendNextOffset());
-      RETURN_NOT_OK(value_data_builder_.Append(
-          reinterpret_cast<const uint8_t*>(values[i].data()), values[i].size()));
+      UnsafeAppendNextOffset();
+      value_data_builder_.UnsafeAppend(reinterpret_cast<const uint8_t*>(values[i].data()),
+                                       values[i].size());
     }
   }
 
@@ -170,11 +174,11 @@ Status StringBuilder::AppendValues(const char** values, int64_t length,
   if (valid_bytes) {
     int64_t valid_bytes_offset = 0;
     for (int64_t i = 0; i < length; ++i) {
-      RETURN_NOT_OK(AppendNextOffset());
+      UnsafeAppendNextOffset();
       if (valid_bytes[i]) {
         if (values[i]) {
-          RETURN_NOT_OK(value_data_builder_.Append(
-              reinterpret_cast<const uint8_t*>(values[i]), value_lengths[i]));
+          value_data_builder_.UnsafeAppend(reinterpret_cast<const uint8_t*>(values[i]),
+                                           value_lengths[i]);
         } else {
           UnsafeAppendToBitmap(valid_bytes + valid_bytes_offset, i - valid_bytes_offset);
           UnsafeAppendToBitmap(false);
@@ -187,19 +191,19 @@ Status StringBuilder::AppendValues(const char** values, int64_t length,
     if (have_null_value) {
       std::vector<uint8_t> valid_vector(length, 0);
       for (int64_t i = 0; i < length; ++i) {
-        RETURN_NOT_OK(AppendNextOffset());
+        UnsafeAppendNextOffset();
         if (values[i]) {
-          RETURN_NOT_OK(value_data_builder_.Append(
-              reinterpret_cast<const uint8_t*>(values[i]), value_lengths[i]));
+          value_data_builder_.UnsafeAppend(reinterpret_cast<const uint8_t*>(values[i]),
+                                           value_lengths[i]);
           valid_vector[i] = 1;
         }
       }
       UnsafeAppendToBitmap(valid_vector.data(), length);
     } else {
       for (int64_t i = 0; i < length; ++i) {
-        RETURN_NOT_OK(AppendNextOffset());
-        RETURN_NOT_OK(value_data_builder_.Append(
-            reinterpret_cast<const uint8_t*>(values[i]), value_lengths[i]));
+        UnsafeAppendNextOffset();
+        value_data_builder_.UnsafeAppend(reinterpret_cast<const uint8_t*>(values[i]),
+                                         value_lengths[i]);
       }
       UnsafeAppendToBitmap(nullptr, length);
     }
@@ -231,8 +235,15 @@ Status FixedSizeBinaryBuilder::AppendValues(const uint8_t* data, int64_t length,
 
 Status FixedSizeBinaryBuilder::AppendNull() {
   RETURN_NOT_OK(Reserve(1));
-  UnsafeAppendToBitmap(false);
-  return byte_builder_.Advance(byte_width_);
+  UnsafeAppendNull();
+  return Status::OK();
+}
+
+Status FixedSizeBinaryBuilder::AppendNulls(int64_t length) {
+  RETURN_NOT_OK(Reserve(length));
+  UnsafeAppendToBitmap(length, false);
+  byte_builder_.UnsafeAdvance(length * byte_width_);
+  return Status::OK();
 }
 
 void FixedSizeBinaryBuilder::Reset() {
@@ -250,9 +261,10 @@ Status FixedSizeBinaryBuilder::FinishInternal(std::shared_ptr<ArrayData>* out) {
   std::shared_ptr<Buffer> data;
   RETURN_NOT_OK(byte_builder_.Finish(&data));
 
-  *out = ArrayData::Make(type_, length_, {null_bitmap_, data}, null_count_);
+  std::shared_ptr<Buffer> null_bitmap;
+  RETURN_NOT_OK(null_bitmap_builder_.Finish(&null_bitmap));
+  *out = ArrayData::Make(type_, length_, {null_bitmap, data}, null_count_);
 
-  null_bitmap_ = nullptr;
   capacity_ = length_ = null_count_ = 0;
   return Status::OK();
 }
@@ -273,9 +285,15 @@ util::string_view FixedSizeBinaryBuilder::GetView(int64_t i) const {
 
 namespace internal {
 
-ChunkedBinaryBuilder::ChunkedBinaryBuilder(int32_t max_chunk_size, MemoryPool* pool)
-    : max_chunk_size_(max_chunk_size),
-      chunk_data_size_(0),
+ChunkedBinaryBuilder::ChunkedBinaryBuilder(int32_t max_chunk_value_length,
+                                           MemoryPool* pool)
+    : max_chunk_value_length_(max_chunk_value_length),
+      builder_(new BinaryBuilder(pool)) {}
+
+ChunkedBinaryBuilder::ChunkedBinaryBuilder(int32_t max_chunk_value_length,
+                                           int32_t max_chunk_length, MemoryPool* pool)
+    : max_chunk_value_length_(max_chunk_value_length),
+      max_chunk_length_(max_chunk_length),
       builder_(new BinaryBuilder(pool)) {}
 
 Status ChunkedBinaryBuilder::Finish(ArrayVector* out) {
@@ -293,7 +311,11 @@ Status ChunkedBinaryBuilder::NextChunk() {
   RETURN_NOT_OK(builder_->Finish(&chunk));
   chunks_.emplace_back(std::move(chunk));
 
-  chunk_data_size_ = 0;
+  if (auto capacity = extra_capacity_) {
+    extra_capacity_ = 0;
+    return Reserve(capacity);
+  }
+
   return Status::OK();
 }
 
@@ -307,6 +329,22 @@ Status ChunkedStringBuilder::Finish(ArrayVector* out) {
     (*out)[i] = std::make_shared<StringArray>(data);
   }
   return Status::OK();
+}
+
+Status ChunkedBinaryBuilder::Reserve(int64_t values) {
+  if (ARROW_PREDICT_FALSE(extra_capacity_ != 0)) {
+    extra_capacity_ += values;
+    return Status::OK();
+  }
+
+  auto min_capacity = builder_->length() + values;
+  auto new_capacity = BufferBuilder::GrowByFactor(builder_->capacity(), min_capacity);
+  if (ARROW_PREDICT_TRUE(new_capacity <= kListMaximumElements)) {
+    return builder_->Resize(new_capacity);
+  }
+
+  extra_capacity_ = new_capacity - kListMaximumElements;
+  return builder_->Resize(kListMaximumElements);
 }
 
 }  // namespace internal

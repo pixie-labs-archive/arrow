@@ -15,9 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#include "gandiva/projector.h"
+#include <cmath>
+
 #include <gtest/gtest.h>
+
 #include "arrow/memory_pool.h"
+
+#include "gandiva/projector.h"
 #include "gandiva/tests/test_util.h"
 #include "gandiva/tree_expr_builder.h"
 
@@ -54,15 +58,15 @@ TEST_F(TestProjector, TestProjectCache) {
 
   std::shared_ptr<Projector> projector;
   auto status = Projector::Make(schema, {sum_expr, sub_expr}, configuration, &projector);
-  EXPECT_TRUE(status.ok());
+  ASSERT_OK(status);
 
   // everything is same, should return the same projector.
   auto schema_same = arrow::schema({field0, field1});
   std::shared_ptr<Projector> cached_projector;
   status = Projector::Make(schema_same, {sum_expr, sub_expr}, configuration,
                            &cached_projector);
-  EXPECT_TRUE(status.ok());
-  EXPECT_TRUE(cached_projector.get() == projector.get());
+  ASSERT_OK(status);
+  EXPECT_EQ(cached_projector, projector);
 
   // schema is different should return a new projector.
   auto field2 = field("f2", int32());
@@ -70,14 +74,20 @@ TEST_F(TestProjector, TestProjectCache) {
   std::shared_ptr<Projector> should_be_new_projector;
   status = Projector::Make(different_schema, {sum_expr, sub_expr}, configuration,
                            &should_be_new_projector);
-  EXPECT_TRUE(status.ok());
-  EXPECT_TRUE(cached_projector.get() != should_be_new_projector.get());
+  ASSERT_OK(status);
+  EXPECT_NE(cached_projector, should_be_new_projector);
 
   // expression list is different should return a new projector.
   std::shared_ptr<Projector> should_be_new_projector1;
   status = Projector::Make(schema, {sum_expr}, configuration, &should_be_new_projector1);
-  EXPECT_TRUE(status.ok());
-  EXPECT_TRUE(cached_projector.get() != should_be_new_projector1.get());
+  ASSERT_OK(status);
+  EXPECT_NE(cached_projector, should_be_new_projector1);
+
+  // another instance of the same configuration, should return the same projector.
+  status = Projector::Make(schema, {sum_expr, sub_expr}, TestConfiguration(),
+                           &cached_projector);
+  ASSERT_OK(status);
+  EXPECT_EQ(cached_projector, projector);
 }
 
 TEST_F(TestProjector, TestProjectCacheFieldNames) {
@@ -150,6 +160,51 @@ TEST_F(TestProjector, TestProjectCacheFloat) {
   EXPECT_TRUE(status.ok()) << status.message();
 
   EXPECT_TRUE(projector0.get() != projector1.get());
+}
+
+TEST_F(TestProjector, TestProjectCacheLiteral) {
+  auto schema = arrow::schema({});
+  auto res = field("result", arrow::decimal(38, 5));
+
+  DecimalScalar128 d0("12345678", 38, 5);
+  DecimalScalar128 d1("98756432", 38, 5);
+
+  auto literal0 = TreeExprBuilder::MakeDecimalLiteral(d0);
+  auto expr0 = TreeExprBuilder::MakeExpression(literal0, res);
+  std::shared_ptr<Projector> projector0;
+  ASSERT_OK(Projector::Make(schema, {expr0}, TestConfiguration(), &projector0));
+
+  auto literal1 = TreeExprBuilder::MakeDecimalLiteral(d1);
+  auto expr1 = TreeExprBuilder::MakeExpression(literal1, res);
+  std::shared_ptr<Projector> projector1;
+  ASSERT_OK(Projector::Make(schema, {expr1}, TestConfiguration(), &projector1));
+
+  EXPECT_NE(projector0.get(), projector1.get());
+}
+
+TEST_F(TestProjector, TestProjectCacheDecimalCast) {
+  auto field_float64 = field("float64", arrow::float64());
+  auto schema = arrow::schema({field_float64});
+
+  auto res_31_13 = field("result", arrow::decimal(31, 13));
+  auto expr0 = TreeExprBuilder::MakeExpression("castDECIMAL", {field_float64}, res_31_13);
+  std::shared_ptr<Projector> projector0;
+  ASSERT_OK(Projector::Make(schema, {expr0}, TestConfiguration(), &projector0));
+
+  // if the output scale is different, the cache can't be used.
+  auto res_31_14 = field("result", arrow::decimal(31, 14));
+  auto expr1 = TreeExprBuilder::MakeExpression("castDECIMAL", {field_float64}, res_31_14);
+  std::shared_ptr<Projector> projector1;
+  ASSERT_OK(Projector::Make(schema, {expr1}, TestConfiguration(), &projector1));
+  EXPECT_NE(projector0.get(), projector1.get());
+
+  // if the output scale/precision are same, should get a cache hit.
+  auto res_31_13_alt = field("result", arrow::decimal(31, 13));
+  auto expr2 =
+      TreeExprBuilder::MakeExpression("castDECIMAL", {field_float64}, res_31_13_alt);
+  std::shared_ptr<Projector> projector2;
+  ASSERT_OK(Projector::Make(schema, {expr2}, TestConfiguration(), &projector2));
+  EXPECT_EQ(projector0.get(), projector2.get());
 }
 
 TEST_F(TestProjector, TestIntSumSub) {
@@ -355,12 +410,13 @@ TEST_F(TestProjector, TestExtendedMath) {
   EXPECT_TRUE(status.ok());
 
   // Validate results
-  EXPECT_ARROW_ARRAY_EQUALS(expected_cbrt, outputs.at(0));
-  EXPECT_ARROW_ARRAY_EQUALS(expected_exp, outputs.at(1));
-  EXPECT_ARROW_ARRAY_EQUALS(expected_log, outputs.at(2));
-  EXPECT_ARROW_ARRAY_EQUALS(expected_log10, outputs.at(3));
-  EXPECT_ARROW_ARRAY_EQUALS(expected_logb, outputs.at(4));
-  EXPECT_ARROW_ARRAY_EQUALS(expected_power, outputs.at(5));
+  double epsilon = 1E-13;
+  EXPECT_ARROW_ARRAY_APPROX_EQUALS(expected_cbrt, outputs.at(0), epsilon);
+  EXPECT_ARROW_ARRAY_APPROX_EQUALS(expected_exp, outputs.at(1), epsilon);
+  EXPECT_ARROW_ARRAY_APPROX_EQUALS(expected_log, outputs.at(2), epsilon);
+  EXPECT_ARROW_ARRAY_APPROX_EQUALS(expected_log10, outputs.at(3), epsilon);
+  EXPECT_ARROW_ARRAY_APPROX_EQUALS(expected_logb, outputs.at(4), epsilon);
+  EXPECT_ARROW_ARRAY_APPROX_EQUALS(expected_power, outputs.at(5), epsilon);
 }
 
 TEST_F(TestProjector, TestFloatLessThan) {

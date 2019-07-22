@@ -17,6 +17,7 @@
 
 #include "arrow/buffer.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <utility>
 
@@ -24,14 +25,15 @@
 #include "arrow/status.h"
 #include "arrow/util/bit-util.h"
 #include "arrow/util/logging.h"
+#include "arrow/util/string.h"
 
 namespace arrow {
 
 Status Buffer::Copy(const int64_t start, const int64_t nbytes, MemoryPool* pool,
                     std::shared_ptr<Buffer>* out) const {
   // Sanity checks
-  DCHECK_LT(start, size_);
-  DCHECK_LE(nbytes, size_ - start);
+  ARROW_CHECK_LT(start, size_);
+  ARROW_CHECK_LE(nbytes, size_ - start);
 
   std::shared_ptr<ResizableBuffer> new_buffer;
   RETURN_NOT_OK(AllocateResizableBuffer(pool, nbytes, &new_buffer));
@@ -45,6 +47,10 @@ Status Buffer::Copy(const int64_t start, const int64_t nbytes, MemoryPool* pool,
 Status Buffer::Copy(const int64_t start, const int64_t nbytes,
                     std::shared_ptr<Buffer>* out) const {
   return Copy(start, nbytes, default_memory_pool(), out);
+}
+
+std::string Buffer::ToHexString() {
+  return HexEncode(data(), static_cast<size_t>(size()));
 }
 
 bool Buffer::Equals(const Buffer& other, const int64_t nbytes) const {
@@ -212,15 +218,34 @@ Status AllocateResizableBuffer(const int64_t size,
   return AllocateResizableBuffer(default_memory_pool(), size, out);
 }
 
+Status AllocateBitmap(MemoryPool* pool, int64_t length, std::shared_ptr<Buffer>* out) {
+  return AllocateBuffer(pool, BitUtil::BytesForBits(length), out);
+}
+
 Status AllocateEmptyBitmap(MemoryPool* pool, int64_t length,
                            std::shared_ptr<Buffer>* out) {
-  RETURN_NOT_OK(AllocateBuffer(pool, BitUtil::BytesForBits(length), out));
+  RETURN_NOT_OK(AllocateBitmap(pool, length, out));
   memset((*out)->mutable_data(), 0, static_cast<size_t>((*out)->size()));
   return Status::OK();
 }
 
 Status AllocateEmptyBitmap(int64_t length, std::shared_ptr<Buffer>* out) {
   return AllocateEmptyBitmap(default_memory_pool(), length, out);
+}
+
+Status ConcatenateBuffers(const std::vector<std::shared_ptr<Buffer>>& buffers,
+                          MemoryPool* pool, std::shared_ptr<Buffer>* out) {
+  int64_t out_length = 0;
+  for (const auto& buffer : buffers) {
+    out_length += buffer->size();
+  }
+  RETURN_NOT_OK(AllocateBuffer(pool, out_length, out));
+  auto out_data = (*out)->mutable_data();
+  for (const auto& buffer : buffers) {
+    std::memcpy(out_data, buffer->data(), buffer->size());
+    out_data += buffer->size();
+  }
+  return Status::OK();
 }
 
 }  // namespace arrow

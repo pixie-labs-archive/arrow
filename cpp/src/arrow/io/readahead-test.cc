@@ -21,6 +21,7 @@
 #include <cstring>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <string>
 #include <thread>
@@ -35,7 +36,8 @@
 #include "arrow/io/readahead.h"
 #include "arrow/memory_pool.h"
 #include "arrow/status.h"
-#include "arrow/test-util.h"
+#include "arrow/testing/gtest_util.h"
+#include "arrow/testing/util.h"
 #include "arrow/util/checked_cast.h"
 
 namespace arrow {
@@ -44,6 +46,51 @@ using internal::checked_cast;
 
 namespace io {
 namespace internal {
+
+class LockedInputStream : public InputStream {
+ public:
+  explicit LockedInputStream(const std::shared_ptr<InputStream>& stream)
+      : stream_(stream) {}
+
+  Status Close() override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return stream_->Close();
+  }
+
+  bool closed() const override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return stream_->closed();
+  }
+
+  Status Tell(int64_t* position) const override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return stream_->Tell(position);
+  }
+
+  Status Read(int64_t nbytes, int64_t* bytes_read, void* buffer) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return stream_->Read(nbytes, bytes_read, buffer);
+  }
+
+  Status Read(int64_t nbytes, std::shared_ptr<Buffer>* out) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return stream_->Read(nbytes, out);
+  }
+
+  bool supports_zero_copy() const override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return stream_->supports_zero_copy();
+  }
+
+  Status Peek(int64_t nbytes, util::string_view* out) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return stream_->Peek(nbytes, out);
+  }
+
+ protected:
+  std::shared_ptr<InputStream> stream_;
+  mutable std::mutex mutex_;
+};
 
 static void sleep_for(double seconds) {
   std::this_thread::sleep_for(
@@ -57,13 +104,13 @@ static void busy_wait(double seconds, std::function<bool()> predicate) {
   }
 }
 
-std::shared_ptr<BufferReader> DataReader(const std::string& data) {
+std::shared_ptr<InputStream> DataReader(const std::string& data) {
   std::shared_ptr<Buffer> buffer;
   ABORT_NOT_OK(Buffer::FromString(data, &buffer));
-  return std::make_shared<BufferReader>(buffer);
+  return std::make_shared<LockedInputStream>(std::make_shared<BufferReader>(buffer));
 }
 
-static int64_t WaitForPosition(const RandomAccessFile& file, int64_t expected,
+static int64_t WaitForPosition(const FileInterface& file, int64_t expected,
                                double seconds = 0.2) {
   int64_t pos = -1;
   busy_wait(seconds, [&]() -> bool {
@@ -73,14 +120,8 @@ static int64_t WaitForPosition(const RandomAccessFile& file, int64_t expected,
   return pos;
 }
 
-static void AssertEventualPosition(const RandomAccessFile& file, int64_t expected) {
+static void AssertEventualPosition(const FileInterface& file, int64_t expected) {
   int64_t pos = WaitForPosition(file, expected);
-  ASSERT_EQ(pos, expected) << "File didn't reach expected position";
-}
-
-static void AssertPosition(const RandomAccessFile& file, int64_t expected) {
-  int64_t pos = -1;
-  ABORT_NOT_OK(file.Tell(&pos));
   ASSERT_EQ(pos, expected) << "File didn't reach expected position";
 }
 
@@ -153,17 +194,11 @@ TEST(ReadaheadSpooler, Close) {
   AssertEventualPosition(*data_reader, 2 * 2);
   ASSERT_OK(spooler.Close());
 
-  // XXX not sure this makes sense
-  ASSERT_OK(spooler.Read(&buf));
-  AssertReadaheadBuffer(buf, {0}, {0}, "01");
-  ASSERT_OK(spooler.Read(&buf));
-  AssertReadaheadBuffer(buf, {0}, {0}, "23");
-  ASSERT_OK(spooler.Read(&buf));
-  AssertReadaheadBufferEOF(buf);
-  AssertPosition(*data_reader, 2 * 2);
-
   // Idempotency
   ASSERT_OK(spooler.Close());
+
+  // ARROW-4823: does not close raw
+  ASSERT_FALSE(data_reader->closed());
 }
 
 TEST(ReadaheadSpooler, Paddings) {

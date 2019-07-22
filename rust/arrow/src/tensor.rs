@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Arrow Tensor Type
+//! Arrow Tensor Type, defined in
+//! [`format/Tensor.fbs`](https://github.com/apache/arrow/blob/master/format/Tensor.fbs).
+
 use std::marker::PhantomData;
 use std::mem;
 
@@ -95,7 +97,9 @@ impl<'a, T: ArrowPrimitiveType> Tensor<'a, T> {
             Some(ref s) => {
                 strides
                     .iter()
-                    .map(|i| assert_eq!(s.len(), i.len(), "shape and stride dimensions differ"))
+                    .map(|i| {
+                        assert_eq!(s.len(), i.len(), "shape and stride dimensions differ")
+                    })
                     .next();
                 names
                     .iter()
@@ -217,8 +221,8 @@ impl<'a, T: ArrowPrimitiveType> Tensor<'a, T> {
 mod tests {
     use super::*;
 
+    use crate::array::*;
     use crate::buffer::Buffer;
-    use crate::builder::*;
 
     #[test]
     fn test_compute_row_major_strides() {
@@ -279,7 +283,7 @@ mod tests {
     fn test_tensor() {
         let mut builder = Int32BufferBuilder::new(16);
         for i in 0..16 {
-            builder.push(i).unwrap();
+            builder.append(i).unwrap();
         }
         let buf = builder.finish();
         let tensor = Int32Tensor::new(buf, Some(vec![2, 8]), None, None);
@@ -294,7 +298,7 @@ mod tests {
     fn test_new_row_major() {
         let mut builder = Int32BufferBuilder::new(16);
         for i in 0..16 {
-            builder.push(i).unwrap();
+            builder.append(i).unwrap();
         }
         let buf = builder.finish();
         let tensor = Int32Tensor::new_row_major(buf, Some(vec![2, 8]), None);
@@ -312,7 +316,7 @@ mod tests {
     fn test_new_column_major() {
         let mut builder = Int32BufferBuilder::new(16);
         for i in 0..16 {
-            builder.push(i).unwrap();
+            builder.append(i).unwrap();
         }
         let buf = builder.finish();
         let tensor = Int32Tensor::new_column_major(buf, Some(vec![2, 8]), None);
@@ -330,7 +334,7 @@ mod tests {
     fn test_with_names() {
         let mut builder = Int64BufferBuilder::new(8);
         for i in 0..8 {
-            builder.push(i).unwrap();
+            builder.append(i).unwrap();
         }
         let buf = builder.finish();
         let names = vec!["Dim 1", "Dim 2"];
@@ -351,18 +355,20 @@ mod tests {
     fn test_inconsistent_strides() {
         let mut builder = Int32BufferBuilder::new(16);
         for i in 0..16 {
-            builder.push(i).unwrap();
+            builder.append(i).unwrap();
         }
         let buf = builder.finish();
         Int32Tensor::new(buf, Some(vec![2, 8]), Some(vec![2, 8, 1]), None);
     }
 
     #[test]
-    #[should_panic(expected = "number of dimensions and number of dimension names differ")]
+    #[should_panic(
+        expected = "number of dimensions and number of dimension names differ"
+    )]
     fn test_inconsistent_names() {
         let mut builder = Int32BufferBuilder::new(16);
         for i in 0..16 {
-            builder.push(i).unwrap();
+            builder.append(i).unwrap();
         }
         let buf = builder.finish();
         Int32Tensor::new(

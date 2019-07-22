@@ -32,7 +32,11 @@ macro_rules! read_num_bytes {
         assert!($size <= $src.len());
         let mut data: $ty = Default::default();
         unsafe {
-            ::std::ptr::copy_nonoverlapping($src.as_ptr(), &mut data as *mut $ty as *mut u8, $size);
+            ::std::ptr::copy_nonoverlapping(
+                $src.as_ptr(),
+                &mut data as *mut $ty as *mut u8,
+                $size,
+            );
         }
         data
     }};
@@ -50,7 +54,13 @@ pub fn convert_to_bytes<T>(val: &T, num_bytes: usize) -> Vec<u8> {
 #[inline]
 pub fn memcpy(source: &[u8], target: &mut [u8]) {
     assert!(target.len() >= source.len());
-    unsafe { ::std::ptr::copy_nonoverlapping(source.as_ptr(), target.as_mut_ptr(), source.len()) }
+    unsafe {
+        ::std::ptr::copy_nonoverlapping(
+            source.as_ptr(),
+            target.as_mut_ptr(),
+            source.len(),
+        )
+    }
 }
 
 #[inline]
@@ -127,6 +137,14 @@ pub fn num_required_bits(x: u64) -> usize {
         }
     }
     0
+}
+
+static BIT_MASK: [u8; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
+
+/// Returns whether bit at position `i` in `data` is set or not
+#[inline]
+pub fn get_bit(data: &[u8], i: usize) -> bool {
+    (data[i >> 3] & BIT_MASK[i & 7]) != 0
 }
 
 /// Utility class for writing bit/byte streams. This class can write data in either
@@ -255,8 +273,8 @@ impl BitWriter {
     }
 
     /// Returns the internal buffer length. This is the maximum number of bytes that this
-    /// writer can write. User needs to call `consume` to consume the current buffer before
-    /// more data can be written.
+    /// writer can write. User needs to call `consume` to consume the current buffer
+    /// before more data can be written.
     #[inline]
     pub fn buffer_len(&self) -> usize {
         self.max_bytes
@@ -271,7 +289,8 @@ impl BitWriter {
         assert!(num_bits <= 64);
         assert_eq!(v.checked_shr(num_bits as u32).unwrap_or(0), 0); // covers case v >> 64
 
-        if self.byte_offset * 8 + self.bit_offset + num_bits > self.max_bytes as usize * 8 {
+        if self.byte_offset * 8 + self.bit_offset + num_bits > self.max_bytes as usize * 8
+        {
             return false;
         }
 
@@ -286,8 +305,8 @@ impl BitWriter {
             self.byte_offset += 8;
             self.bit_offset -= 64;
             self.buffered_values = 0;
-            // Perform checked right shift: v >> offset, where offset < 64, otherwise we shift
-            // all bits
+            // Perform checked right shift: v >> offset, where offset < 64, otherwise we
+            // shift all bits
             self.buffered_values = v
                 .checked_shr((num_bits - self.bit_offset) as u32)
                 .unwrap_or(0);
@@ -321,7 +340,12 @@ impl BitWriter {
     /// Returns false if there's not enough room left, or the `pos` is not valid.
     /// True otherwise.
     #[inline]
-    pub fn put_aligned_offset<T: Copy>(&mut self, val: T, num_bytes: usize, offset: usize) -> bool {
+    pub fn put_aligned_offset<T: Copy>(
+        &mut self,
+        val: T,
+        num_bytes: usize,
+        offset: usize,
+    ) -> bool {
         if num_bytes + offset > self.max_bytes {
             return false;
         }
@@ -432,8 +456,8 @@ impl BitReader {
             return None;
         }
 
-        let mut v =
-            trailing_bits(self.buffered_values, self.bit_offset + num_bits) >> self.bit_offset;
+        let mut v = trailing_bits(self.buffered_values, self.bit_offset + num_bits)
+            >> self.bit_offset;
         self.bit_offset += num_bits;
 
         if self.bit_offset >= 64 {
@@ -491,8 +515,8 @@ impl BitReader {
                     in_ptr = unpack32(in_ptr, out_ptr, num_bits);
                     self.byte_offset += 4 * num_bits;
                     for n in 0..32 {
-                        // We need to copy from smaller size to bigger size to avoid overwritting
-                        // other memory regions.
+                        // We need to copy from smaller size to bigger size to avoid
+                        // overwritting other memory regions.
                         if size_of::<T>() > size_of::<u32>() {
                             ::std::ptr::copy_nonoverlapping(
                                 out_buf[n..].as_ptr() as *const u32,
@@ -733,6 +757,33 @@ mod tests {
     }
 
     #[test]
+    fn test_get_bit() {
+        // 00001101
+        assert_eq!(true, get_bit(&[0b00001101], 0));
+        assert_eq!(false, get_bit(&[0b00001101], 1));
+        assert_eq!(true, get_bit(&[0b00001101], 2));
+        assert_eq!(true, get_bit(&[0b00001101], 3));
+
+        // 01001001 01010010
+        assert_eq!(true, get_bit(&[0b01001001, 0b01010010], 0));
+        assert_eq!(false, get_bit(&[0b01001001, 0b01010010], 1));
+        assert_eq!(false, get_bit(&[0b01001001, 0b01010010], 2));
+        assert_eq!(true, get_bit(&[0b01001001, 0b01010010], 3));
+        assert_eq!(false, get_bit(&[0b01001001, 0b01010010], 4));
+        assert_eq!(false, get_bit(&[0b01001001, 0b01010010], 5));
+        assert_eq!(true, get_bit(&[0b01001001, 0b01010010], 6));
+        assert_eq!(false, get_bit(&[0b01001001, 0b01010010], 7));
+        assert_eq!(false, get_bit(&[0b01001001, 0b01010010], 8));
+        assert_eq!(true, get_bit(&[0b01001001, 0b01010010], 9));
+        assert_eq!(false, get_bit(&[0b01001001, 0b01010010], 10));
+        assert_eq!(false, get_bit(&[0b01001001, 0b01010010], 11));
+        assert_eq!(true, get_bit(&[0b01001001, 0b01010010], 12));
+        assert_eq!(false, get_bit(&[0b01001001, 0b01010010], 13));
+        assert_eq!(true, get_bit(&[0b01001001, 0b01010010], 14));
+        assert_eq!(false, get_bit(&[0b01001001, 0b01010010], 15));
+    }
+
+    #[test]
     fn test_log2() {
         assert_eq!(log2(1), 0);
         assert_eq!(log2(2), 1);
@@ -887,8 +938,8 @@ mod tests {
         for s in SIZE {
             for i in 0..33 {
                 match i {
-                    0...8 => test_get_batch_helper::<u8>(*s, i),
-                    9...16 => test_get_batch_helper::<u16>(*s, i),
+                    0..=8 => test_get_batch_helper::<u8>(*s, i),
+                    9..=16 => test_get_batch_helper::<u16>(*s, i),
                     _ => test_get_batch_helper::<u32>(*s, i),
                 }
             }

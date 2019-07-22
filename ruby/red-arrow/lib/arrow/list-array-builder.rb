@@ -56,7 +56,7 @@ module Arrow
         when ::Array
           append_value_raw
           @value_builder ||= value_builder
-          @value_builder.append_values(value, nil)
+          @value_builder.append(*value)
         else
           message = "list value must be nil or Array: #{value.inspect}"
           raise ArgumentError, message
@@ -80,6 +80,16 @@ module Arrow
         lists.each do |list|
           append_value(list)
         end
+      end
+    end
+
+    # @since 0.12.0
+    def append(*values)
+      if values.empty?
+        # For backward compatibility
+        append_value
+      else
+        super
       end
     end
   end

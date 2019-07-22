@@ -15,6 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// TODO(wesm): LLVM 7 produces pesky C4244 that disable pragmas around the LLVM
+// includes seem to not fix as with LLVM 6
+#if defined(_MSC_VER)
+#pragma warning(disable : 4244)
+#endif
+
 #include "gandiva/engine.h"
 
 #include <iostream>
@@ -22,6 +28,15 @@
 #include <string>
 #include <unordered_set>
 #include <utility>
+
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4141)
+#pragma warning(disable : 4146)
+#pragma warning(disable : 4244)
+#pragma warning(disable : 4267)
+#pragma warning(disable : 4624)
+#endif
 
 #include <llvm/Analysis/Passes.h>
 #include <llvm/Analysis/TargetTransformInfo.h>
@@ -36,12 +51,23 @@
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Transforms/IPO.h>
 #include <llvm/Transforms/IPO/PassManagerBuilder.h>
+#include <llvm/Transforms/InstCombine/InstCombine.h>
 #include <llvm/Transforms/Scalar.h>
 #include <llvm/Transforms/Scalar/GVN.h>
+#include <llvm/Transforms/Utils.h>
 #include <llvm/Transforms/Vectorize.h>
+
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+
+#include "gandiva/decimal_ir.h"
 #include "gandiva/exported_funcs_registry.h"
 
 namespace gandiva {
+
+extern const unsigned char kPrecompiledBitcode[];
+extern const size_t kPrecompiledBitcodeSize;
 
 std::once_flag init_once_flag;
 
@@ -91,7 +117,11 @@ Status Engine::Make(std::shared_ptr<Configuration> config,
   // Add mappings for functions that can be accessed from LLVM/IR module.
   engine_obj->AddGlobalMappings();
 
-  auto status = engine_obj->LoadPreCompiledIRFiles(config->byte_code_file_path());
+  auto status = engine_obj->LoadPreCompiledIR();
+  ARROW_RETURN_NOT_OK(status);
+
+  // Add decimal functions
+  status = DecimalIR::AddFunctions(engine_obj.get());
   ARROW_RETURN_NOT_OK(status);
 
   *engine = std::move(engine_obj);
@@ -99,14 +129,17 @@ Status Engine::Make(std::shared_ptr<Configuration> config,
 }
 
 // Handling for pre-compiled IR libraries.
-Status Engine::LoadPreCompiledIRFiles(const std::string& byte_code_file_path) {
+Status Engine::LoadPreCompiledIR() {
+  auto bitcode = llvm::StringRef(reinterpret_cast<const char*>(kPrecompiledBitcode),
+                                 kPrecompiledBitcodeSize);
+
   /// Read from file into memory buffer.
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> buffer_or_error =
-      llvm::MemoryBuffer::getFile(byte_code_file_path);
-  ARROW_RETURN_IF(
-      !buffer_or_error,
-      Status::CodeGenError("Could not load module from IR ", byte_code_file_path, ": ",
-                           buffer_or_error.getError().message()));
+      llvm::MemoryBuffer::getMemBuffer(bitcode, "precompiled", false);
+
+  ARROW_RETURN_IF(!buffer_or_error,
+                  Status::CodeGenError("Could not load module from IR: ",
+                                       buffer_or_error.getError().message()));
 
   std::unique_ptr<llvm::MemoryBuffer> buffer = move(buffer_or_error.get());
 
@@ -114,11 +147,12 @@ Status Engine::LoadPreCompiledIRFiles(const std::string& byte_code_file_path) {
   llvm::Expected<std::unique_ptr<llvm::Module>> module_or_error =
       llvm::getOwningLazyBitcodeModule(move(buffer), *context());
   if (!module_or_error) {
-    std::string error_string;
-    llvm::handleAllErrors(module_or_error.takeError(), [&](llvm::ErrorInfoBase& eib) {
-      error_string = eib.message();
-    });
-    return Status::CodeGenError(error_string);
+    // NOTE: llvm::handleAllErrors() fails linking with RTTI-disabled LLVM builds
+    // (ARROW-5148)
+    std::string str;
+    llvm::raw_string_ostream stream(str);
+    stream << module_or_error.takeError();
+    return Status::CodeGenError(stream.str());
   }
   std::unique_ptr<llvm::Module> ir_module = move(module_or_error.get());
 
@@ -183,7 +217,7 @@ Status Engine::FinalizeModule(bool optimise_ir, bool dump_ir) {
 
     // run the optimiser
     llvm::PassManagerBuilder pass_builder;
-    pass_builder.OptLevel = 2;
+    pass_builder.OptLevel = 3;
     pass_builder.populateModulePassManager(*pass_manager);
     pass_manager->run(*module_);
 
@@ -222,7 +256,7 @@ void Engine::DumpIR(std::string prefix) {
   std::string str;
 
   llvm::raw_string_ostream stream(str);
-  module_->print(stream, NULL);
+  module_->print(stream, nullptr);
   std::cout << "====" << prefix << "===" << str << "\n";
 }
 

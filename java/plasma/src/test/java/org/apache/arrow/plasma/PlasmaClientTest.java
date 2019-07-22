@@ -23,6 +23,10 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+import org.apache.arrow.plasma.exceptions.DuplicateObjectException;
+import org.apache.arrow.plasma.exceptions.PlasmaClientException;
+import org.junit.Assert;
+
 public class PlasmaClientTest {
 
   private String storeSuffix = "/tmp/store";
@@ -142,8 +146,12 @@ public class PlasmaClientTest {
     assert Arrays.equals(values.get(0), value1);
     assert Arrays.equals(values.get(1), value2);
     System.out.println("Plasma java client get multi-object test success.");
-    pLink.put(id1, value1, null);
-    System.out.println("Plasma java client put same object twice exception test success.");
+    try {
+      pLink.put(id1, value1, null);
+      Assert.fail("Fail to throw DuplicateObjectException when put an object into plasma store twice.");
+    } catch (DuplicateObjectException e) {
+      System.out.println("Plasma java client put same object twice exception test success.");
+    }
     byte[] id1Hash = pLink.hash(id1);
     assert id1Hash != null;
     System.out.println("Plasma java client hash test success.");
@@ -198,7 +206,32 @@ public class PlasmaClientTest {
     assert !pLink.contains(id6);
     System.out.println("Plasma java client delete test success.");
     
-    cleanup();
+    // Test calling shuntdown while getting the object.
+    Thread thread = new Thread(() -> {
+      try {
+        TimeUnit.SECONDS.sleep(1);
+        cleanup();
+      } catch (InterruptedException e) {
+        throw new RuntimeException("Got InterruptedException when sleeping.", e);
+      }
+    });
+    thread.start();
+
+    try {
+      byte[] idNone =  new byte[20];
+      Arrays.fill(idNone, (byte)987);
+      pLink.get(idNone, timeoutMs, false);
+      Assert.fail("Fail to throw PlasmaClientException when get an object " +
+                  "when object store shutdown.");
+    } catch (PlasmaClientException e) {
+      System.out.println(String.format("Expected PlasmaClientException: %s", e));
+    }
+
+    try {
+      thread.join();
+    } catch (Exception e) {
+      System.out.println(String.format("Excpetion caught: %s", e));
+    }
     System.out.println("All test success.");
 
   }

@@ -19,7 +19,6 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import math
 import multiprocessing
 import os
 import pytest
@@ -32,11 +31,12 @@ import time
 
 import numpy as np
 import pyarrow as pa
-import pandas as pd
 
 
 DEFAULT_PLASMA_STORE_MEMORY = 10 ** 8
 USE_VALGRIND = os.getenv("PLASMA_VALGRIND") == "1"
+EXTERNAL_STORE = "hashtable://test"
+SMALL_OBJECT_SIZE = 9000
 
 
 def random_name():
@@ -110,15 +110,11 @@ def assert_get_object_equal(unit_test, client1, client2, object_id,
 class TestPlasmaClient(object):
 
     def setup_method(self, test_method):
-        use_one_memory_mapped_file = (test_method ==
-                                      self.test_use_one_memory_mapped_file)
-
         import pyarrow.plasma as plasma
         # Start Plasma store.
         self.plasma_store_ctx = plasma.start_plasma_store(
             plasma_store_memory=DEFAULT_PLASMA_STORE_MEMORY,
-            use_valgrind=USE_VALGRIND,
-            use_one_memory_mapped_file=use_one_memory_mapped_file)
+            use_valgrind=USE_VALGRIND)
         self.plasma_store_name, self.p = self.plasma_store_ctx.__enter__()
         # Connect to Plasma.
         self.plasma_client = plasma.connect(self.plasma_store_name)
@@ -231,7 +227,7 @@ class TestPlasmaClient(object):
         # Make sure that creating the same object twice raises an exception.
         object_id = random_object_id()
         self.plasma_client.create_and_seal(object_id, b'a', b'b')
-        with pytest.raises(pa.PlasmaObjectExists):
+        with pytest.raises(pa.plasma.PlasmaObjectExists):
             self.plasma_client.create_and_seal(object_id, b'a', b'b')
 
         # Make sure that these objects can be evicted.
@@ -410,7 +406,9 @@ class TestPlasmaClient(object):
         # Assert that they are equal.
         np.testing.assert_equal(data, array)
 
+    @pytest.mark.pandas
     def test_store_pandas_dataframe(self):
+        import pandas as pd
         import pyarrow.plasma as plasma
         d = {'one': pd.Series([1., 2., 3.], index=['a', 'b', 'c']),
              'two': pd.Series([1., 2., 3., 4.], index=['a', 'b', 'c', 'd'])}
@@ -471,22 +469,26 @@ class TestPlasmaClient(object):
         memory_buffers.append(memory_buffer)
         # Remaining space is 50%. Make sure that we can't create an
         # object of size 50% + 1, but we can create one of size 20%.
-        assert_create_raises_plasma_full(self, 50 * PERCENT + 1)
+        assert_create_raises_plasma_full(
+            self, 50 * PERCENT + SMALL_OBJECT_SIZE)
         _, memory_buffer, _ = create_object(self.plasma_client, 20 * PERCENT)
         del memory_buffer
         _, memory_buffer, _ = create_object(self.plasma_client, 20 * PERCENT)
         del memory_buffer
-        assert_create_raises_plasma_full(self, 50 * PERCENT + 1)
+        assert_create_raises_plasma_full(
+            self, 50 * PERCENT + SMALL_OBJECT_SIZE)
 
         _, memory_buffer, _ = create_object(self.plasma_client, 20 * PERCENT)
         memory_buffers.append(memory_buffer)
         # Remaining space is 30%.
-        assert_create_raises_plasma_full(self, 30 * PERCENT + 1)
+        assert_create_raises_plasma_full(
+            self, 30 * PERCENT + SMALL_OBJECT_SIZE)
 
         _, memory_buffer, _ = create_object(self.plasma_client, 10 * PERCENT)
         memory_buffers.append(memory_buffer)
         # Remaining space is 20%.
-        assert_create_raises_plasma_full(self, 20 * PERCENT + 1)
+        assert_create_raises_plasma_full(
+            self, 20 * PERCENT + SMALL_OBJECT_SIZE)
 
     def test_contains(self):
         fake_object_ids = [random_object_id() for _ in range(100)]
@@ -838,7 +840,7 @@ class TestPlasmaClient(object):
             assert -1 == recv_dsize
             assert -1 == recv_msize
 
-    def test_use_one_memory_mapped_file(self):
+    def test_use_full_memory(self):
         # Fill the object store up with a large number of small objects and let
         # them go out of scope.
         for _ in range(100):
@@ -850,9 +852,13 @@ class TestPlasmaClient(object):
         for _ in range(2):
             create_object(self.plasma_client2, DEFAULT_PLASMA_STORE_MEMORY, 0)
         # Verify that an object that is too large does not fit.
-        with pytest.raises(pa.lib.PlasmaStoreFull):
-            create_object(self.plasma_client2, DEFAULT_PLASMA_STORE_MEMORY + 1,
-                          0)
+        # Also verifies that the right error is thrown, and does not
+        # create the object ID prematurely.
+        object_id = random_object_id()
+        for i in range(3):
+            with pytest.raises(pa.plasma.PlasmaStoreFull):
+                self.plasma_client2.create(
+                    object_id, DEFAULT_PLASMA_STORE_MEMORY + SMALL_OBJECT_SIZE)
 
     def test_client_death_during_get(self):
         import pyarrow.plasma as plasma
@@ -916,6 +922,63 @@ class TestPlasmaClient(object):
                                 "to finish.")
             if not p.is_alive():
                 break
+
+
+@pytest.mark.plasma
+class TestEvictionToExternalStore(object):
+
+    def setup_method(self, test_method):
+        import pyarrow.plasma as plasma
+        # Start Plasma store.
+        self.plasma_store_ctx = plasma.start_plasma_store(
+            plasma_store_memory=1000 * 1024,
+            use_valgrind=USE_VALGRIND,
+            external_store=EXTERNAL_STORE)
+        self.plasma_store_name, self.p = self.plasma_store_ctx.__enter__()
+        # Connect to Plasma.
+        self.plasma_client = plasma.connect(self.plasma_store_name)
+
+    def teardown_method(self, test_method):
+        try:
+            # Check that the Plasma store is still alive.
+            assert self.p.poll() is None
+            self.p.send_signal(signal.SIGTERM)
+            if sys.version_info >= (3, 3):
+                self.p.wait(timeout=5)
+            else:
+                self.p.wait()
+        finally:
+            self.plasma_store_ctx.__exit__(None, None, None)
+
+    def test_eviction(self):
+        client = self.plasma_client
+
+        object_ids = [random_object_id() for _ in range(0, 20)]
+        data = b'x' * 100 * 1024
+        metadata = b''
+
+        for i in range(0, 20):
+            # Test for object non-existence.
+            assert not client.contains(object_ids[i])
+
+            # Create and seal the object.
+            client.create_and_seal(object_ids[i], data, metadata)
+
+            # Test that the client can get the object.
+            assert client.contains(object_ids[i])
+
+        for i in range(0, 20):
+            # Since we are accessing objects sequentially, every object we
+            # access would be a cache "miss" owing to LRU eviction.
+            # Try and access the object from the plasma store first, and then
+            # try external store on failure. This should succeed to fetch the
+            # object. However, it may evict the next few objects.
+            [result] = client.get_buffers([object_ids[i]])
+            assert result.to_pybytes() == data
+
+        # Make sure we still cannot fetch objects that do not exist
+        [result] = client.get_buffers([random_object_id()], timeout_ms=100)
+        assert result is None
 
 
 @pytest.mark.plasma
@@ -987,9 +1050,10 @@ def test_plasma_list():
 
         # Test ref_count
         v = plasma_client.put(np.zeros(3))
-        l2 = plasma_client.list()
         # Ref count has already been released
-        assert l2[v]["ref_count"] == 0
+        # XXX flaky test, disabled (ARROW-3344)
+        # l2 = plasma_client.list()
+        # assert l2[v]["ref_count"] == 0
         a = plasma_client.get(v)
         l3 = plasma_client.list()
         assert l3[v]["ref_count"] == 1
@@ -1004,18 +1068,19 @@ def test_plasma_list():
         assert l5[w]["state"] == "sealed"
 
         # Test timestamps
+        slack = 1.5  # seconds
         t1 = time.time()
         x, _, _ = create_object(plasma_client, 3, metadata_size=0, seal=False)
         t2 = time.time()
         l6 = plasma_client.list()
-        assert math.floor(t1) <= l6[x]["create_time"] <= math.ceil(t2)
+        assert t1 - slack <= l6[x]["create_time"] <= t2 + slack
         time.sleep(2.0)
         t3 = time.time()
         plasma_client.seal(x)
         t4 = time.time()
         l7 = plasma_client.list()
-        assert math.floor(t3 - t2) <= l7[x]["construct_duration"]
-        assert l7[x]["construct_duration"] <= math.ceil(t4 - t1)
+        assert t3 - t2 - slack <= l7[x]["construct_duration"]
+        assert l7[x]["construct_duration"] <= t4 - t1 + slack
 
 
 @pytest.mark.plasma
@@ -1024,3 +1089,11 @@ def test_object_id_randomness():
     first_object_id = subprocess.check_output(["python", "-c", cmd])
     second_object_id = subprocess.check_output(["python", "-c", cmd])
     assert first_object_id != second_object_id
+
+
+@pytest.mark.plasma
+def test_store_capacity():
+    import pyarrow.plasma as plasma
+    with plasma.start_plasma_store(plasma_store_memory=10000) as (name, p):
+        plasma_client = plasma.connect(name)
+        assert plasma_client.store_capacity() == 10000

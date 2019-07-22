@@ -31,17 +31,26 @@ import org.slf4j.LoggerFactory;
 
 import com.google.common.base.Preconditions;
 
+/**
+ * Simple server that echoes back data received.
+ */
 public class EchoServer {
   private static final Logger LOGGER = LoggerFactory.getLogger(EchoServer.class);
   private final ServerSocket serverSocket;
   private boolean closed = false;
 
+  /**
+   * Constructs a new instance that binds to the given port.
+   */
   public EchoServer(int port) throws IOException {
-    LOGGER.info("Starting echo server.");
+    LOGGER.debug("Starting echo server.");
     serverSocket = new ServerSocket(port);
-    LOGGER.info("Running echo server on port: " + port());
+    LOGGER.debug("Running echo server on port: " + port());
   }
 
+  /**
+   * Main method to run the server, the first argument is an optional port number.
+   */
   public static void main(String[] args) throws Exception {
     int port;
     if (args.length > 0) {
@@ -56,12 +65,15 @@ public class EchoServer {
     return serverSocket.getLocalPort();
   }
 
+  /**
+   * Starts the main server event loop.
+   */
   public void run() throws IOException {
     try {
       while (!closed) {
-        LOGGER.info("Waiting to accept new client connection.");
+        LOGGER.debug("Waiting to accept new client connection.");
         Socket clientSocket = serverSocket.accept();
-        LOGGER.info("Accepted new client connection.");
+        LOGGER.debug("Accepted new client connection.");
         try (ClientConnection client = new ClientConnection(clientSocket)) {
           try {
             client.run();
@@ -69,7 +81,7 @@ public class EchoServer {
             LOGGER.warn("Error handling client connection.", e);
           }
         }
-        LOGGER.info("Closed connection with client");
+        LOGGER.debug("Closed connection with client");
       }
     } catch (java.net.SocketException ex) {
       if (!closed) {
@@ -77,7 +89,7 @@ public class EchoServer {
       }
     } finally {
       serverSocket.close();
-      LOGGER.info("Server closed.");
+      LOGGER.debug("Server closed.");
     }
   }
 
@@ -86,6 +98,9 @@ public class EchoServer {
     serverSocket.close();
   }
 
+  /**
+   * Handler for each client connection to the server.
+   */
   public static class ClientConnection implements AutoCloseable {
     public final Socket socket;
 
@@ -93,6 +108,9 @@ public class EchoServer {
       this.socket = socket;
     }
 
+    /**
+     * Reads a record batch off the socket and writes it back out.
+     */
     public void run() throws IOException {
       // Read the entire input stream and write it back
       try (BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE);
@@ -116,7 +134,7 @@ public class EchoServer {
           }
           writer.end();
           Preconditions.checkState(reader.bytesRead() == writer.bytesWritten());
-          LOGGER.info(String.format("Echoed %d records", echoed));
+          LOGGER.debug(String.format("Echoed %d records", echoed));
         }
       }
     }

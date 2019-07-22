@@ -15,7 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
-from collections import OrderedDict, defaultdict
+from __future__ import absolute_import
+
+import collections
 import six
 import sys
 
@@ -23,8 +25,7 @@ import numpy as np
 
 import pyarrow
 from pyarrow.compat import builtin_pickle
-from pyarrow.lib import (SerializationContext, _default_serialization_context,
-                         py_buffer)
+from pyarrow.lib import SerializationContext, py_buffer
 
 try:
     import cloudpickle
@@ -54,6 +55,25 @@ def _deserialize_numpy_array_list(data):
         return data[0].view(data[1])
     else:
         return np.array(data[0], dtype=np.dtype(data[1]))
+
+
+def _serialize_numpy_matrix(obj):
+    if obj.dtype.str != '|O':
+        # Make the array c_contiguous if necessary so that we can call change
+        # the view.
+        if not obj.flags.c_contiguous:
+            obj = np.ascontiguousarray(obj.A)
+        return obj.A.view('uint8'), obj.A.dtype.str
+    else:
+        return obj.A.tolist(), obj.A.dtype.str
+
+
+def _deserialize_numpy_matrix(data):
+    if data[1] != '|O':
+        assert data[0].dtype == np.uint8
+        return np.matrix(data[0].view(data[1]), copy=False)
+    else:
+        return np.matrix(data[0], dtype=np.dtype(data[1]), copy=False)
 
 
 # ----------------------------------------------------------------------
@@ -174,6 +194,28 @@ def _register_custom_pandas_handlers(context):
         custom_serializer=_pickle_to_buffer,
         custom_deserializer=_load_pickle_from_buffer)
 
+    if hasattr(pd.core, 'arrays'):
+        if hasattr(pd.core.arrays, 'interval'):
+            context.register_type(
+                pd.core.arrays.interval.IntervalArray,
+                'pd.core.arrays.interval.IntervalArray',
+                custom_serializer=_pickle_to_buffer,
+                custom_deserializer=_load_pickle_from_buffer)
+
+        if hasattr(pd.core.arrays, 'period'):
+            context.register_type(
+                pd.core.arrays.period.PeriodArray,
+                'pd.core.arrays.period.PeriodArray',
+                custom_serializer=_pickle_to_buffer,
+                custom_deserializer=_load_pickle_from_buffer)
+
+        if hasattr(pd.core.arrays, 'datetimes'):
+            context.register_type(
+                pd.core.arrays.datetimes.DatetimeArray,
+                'pd.core.arrays.datetimes.DatetimeArray',
+                custom_serializer=_pickle_to_buffer,
+                custom_deserializer=_load_pickle_from_buffer)
+
     context.register_type(
         pd.DataFrame, 'pd.DataFrame',
         custom_serializer=_serialize_pandas_dataframe,
@@ -188,10 +230,19 @@ def register_torch_serialization_handlers(serialization_context):
         import torch
 
         def _serialize_torch_tensor(obj):
-            return obj.detach().numpy()
+            if obj.is_sparse:
+                # TODO(pcm): Once ARROW-4453 is resolved, return sparse
+                # tensor representation here
+                return (obj._indices().detach().numpy(),
+                        obj._values().detach().numpy(), list(obj.shape))
+            else:
+                return obj.detach().numpy()
 
         def _deserialize_torch_tensor(data):
-            return torch.from_numpy(data)
+            if isinstance(data, tuple):
+                return torch.sparse_coo_tensor(data[0], data[1], data[2])
+            else:
+                return torch.from_numpy(data)
 
         for t in [torch.FloatTensor, torch.DoubleTensor, torch.HalfTensor,
                   torch.ByteTensor, torch.CharTensor, torch.ShortTensor,
@@ -203,6 +254,52 @@ def register_torch_serialization_handlers(serialization_context):
     except ImportError:
         # no torch
         pass
+
+
+def _register_collections_serialization_handlers(serialization_context):
+    def _serialize_deque(obj):
+        return list(obj)
+
+    def _deserialize_deque(data):
+        return collections.deque(data)
+
+    serialization_context.register_type(
+        collections.deque, "collections.deque",
+        custom_serializer=_serialize_deque,
+        custom_deserializer=_deserialize_deque)
+
+    def _serialize_ordered_dict(obj):
+        return list(obj.keys()), list(obj.values())
+
+    def _deserialize_ordered_dict(data):
+        return collections.OrderedDict(zip(data[0], data[1]))
+
+    serialization_context.register_type(
+        collections.OrderedDict, "collections.OrderedDict",
+        custom_serializer=_serialize_ordered_dict,
+        custom_deserializer=_deserialize_ordered_dict)
+
+    def _serialize_default_dict(obj):
+        return list(obj.keys()), list(obj.values()), obj.default_factory
+
+    def _deserialize_default_dict(data):
+        return collections.defaultdict(data[2], zip(data[0], data[1]))
+
+    serialization_context.register_type(
+        collections.defaultdict, "collections.defaultdict",
+        custom_serializer=_serialize_default_dict,
+        custom_deserializer=_deserialize_default_dict)
+
+    def _serialize_counter(obj):
+        return list(obj.keys()), list(obj.values())
+
+    def _deserialize_counter(data):
+        return collections.Counter(dict(zip(data[0], data[1])))
+
+    serialization_context.register_type(
+        collections.Counter, "collections.Counter",
+        custom_serializer=_serialize_counter,
+        custom_deserializer=_deserialize_counter)
 
 
 def register_default_serialization_handlers(serialization_context):
@@ -224,33 +321,16 @@ def register_default_serialization_handlers(serialization_context):
             custom_serializer=lambda obj: str(obj),
             custom_deserializer=lambda data: long(data))  # noqa: F821
 
-    def _serialize_ordered_dict(obj):
-        return list(obj.keys()), list(obj.values())
-
-    def _deserialize_ordered_dict(data):
-        return OrderedDict(zip(data[0], data[1]))
-
-    serialization_context.register_type(
-        OrderedDict, "OrderedDict",
-        custom_serializer=_serialize_ordered_dict,
-        custom_deserializer=_deserialize_ordered_dict)
-
-    def _serialize_default_dict(obj):
-        return list(obj.keys()), list(obj.values()), obj.default_factory
-
-    def _deserialize_default_dict(data):
-        return defaultdict(data[2], zip(data[0], data[1]))
-
-    serialization_context.register_type(
-        defaultdict, "defaultdict",
-        custom_serializer=_serialize_default_dict,
-        custom_deserializer=_deserialize_default_dict)
-
     serialization_context.register_type(
         type(lambda: 0), "function",
         pickle=True)
 
     serialization_context.register_type(type, "type", pickle=True)
+
+    serialization_context.register_type(
+        np.matrix, 'np.matrix',
+        custom_serializer=_serialize_numpy_matrix,
+        custom_deserializer=_deserialize_numpy_matrix)
 
     serialization_context.register_type(
         np.ndarray, 'np.array',
@@ -272,6 +352,7 @@ def register_default_serialization_handlers(serialization_context):
         custom_serializer=_serialize_pyarrow_table,
         custom_deserializer=_deserialize_pyarrow_table)
 
+    _register_collections_serialization_handlers(serialization_context)
     _register_custom_pandas_handlers(serialization_context)
 
 
@@ -279,6 +360,3 @@ def default_serialization_context():
     context = SerializationContext()
     register_default_serialization_handlers(context)
     return context
-
-
-register_default_serialization_handlers(_default_serialization_context)

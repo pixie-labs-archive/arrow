@@ -18,22 +18,30 @@
 #ifndef PARQUET_FILE_METADATA_H
 #define PARQUET_FILE_METADATA_H
 
+#include <cstdint>
 #include <memory>
-#include <set>
 #include <string>
 #include <vector>
 
 #include "arrow/util/key_value_metadata.h"
+#include "arrow/util/macros.h"
 
+#include "parquet/platform.h"
 #include "parquet/properties.h"
-#include "parquet/schema.h"
-#include "parquet/statistics.h"
 #include "parquet/types.h"
-#include "parquet/util/macros.h"
-#include "parquet/util/memory.h"
-#include "parquet/util/visibility.h"
 
 namespace parquet {
+
+class ColumnDescriptor;
+class EncodedStatistics;
+class Statistics;
+class SchemaDescriptor;
+
+namespace schema {
+
+class ColumnPath;
+
+}  // namespace schema
 
 using KeyValueMetadata = ::arrow::KeyValueMetadata;
 
@@ -43,6 +51,7 @@ class PARQUET_EXPORT ApplicationVersion {
   static const ApplicationVersion& PARQUET_251_FIXED_VERSION();
   static const ApplicationVersion& PARQUET_816_FIXED_VERSION();
   static const ApplicationVersion& PARQUET_CPP_FIXED_STATS_VERSION();
+  static const ApplicationVersion& PARQUET_MR_FIXED_STATS_VERSION();
   // Regular expression for the version format
   // major . minor . patch unknown - prerelease.x + build info
   // Eg: 1.5.0ab-cdh5.5.0+cd
@@ -100,14 +109,16 @@ class PARQUET_EXPORT ColumnChunkMetaData {
 
   // column chunk
   int64_t file_offset() const;
+
   // parameter is only used when a dataset is spread across multiple files
   const std::string& file_path() const;
+
   // column metadata
   Type::type type() const;
   int64_t num_values() const;
   std::shared_ptr<schema::ColumnPath> path_in_schema() const;
   bool is_stats_set() const;
-  std::shared_ptr<RowGroupStatistics> statistics() const;
+  std::shared_ptr<Statistics> statistics() const;
   Compression::type compression() const;
   const std::vector<Encoding::type>& encodings() const;
   bool has_dictionary_page() const;
@@ -173,12 +184,18 @@ class PARQUET_EXPORT FileMetaData {
 
   const ApplicationVersion& writer_version() const;
 
-  void WriteTo(OutputStream* dst) const;
+  void WriteTo(::arrow::io::OutputStream* dst) const;
 
   // Return const-pointer to make it clear that this object is not to be copied
   const SchemaDescriptor* schema() const;
 
   std::shared_ptr<const KeyValueMetadata> key_value_metadata() const;
+
+  // Set file_path ColumnChunk fields to a particular value
+  void set_file_path(const std::string& path);
+
+  // Merge row-group metadata from "other" FileMetaData object
+  void AppendRowGroups(const FileMetaData& other);
 
  private:
   friend FileMetaDataBuilder;
@@ -207,7 +224,7 @@ class PARQUET_EXPORT ColumnChunkMetaDataBuilder {
   // Used when a dataset is spread across multiple files
   void set_file_path(const std::string& path);
   // column metadata
-  void SetStatistics(bool is_signed, const EncodedStatistics& stats);
+  void SetStatistics(const EncodedStatistics& stats);
   // get the column descriptor
   const ColumnDescriptor* descr() const;
   // commit the metadata
@@ -220,7 +237,7 @@ class PARQUET_EXPORT ColumnChunkMetaDataBuilder {
   const void* contents() const;
 
   // For writing metadata at end of column chunk
-  void WriteTo(OutputStream* sink);
+  void WriteTo(::arrow::io::OutputStream* sink);
 
  private:
   explicit ColumnChunkMetaDataBuilder(const std::shared_ptr<WriterProperties>& props,

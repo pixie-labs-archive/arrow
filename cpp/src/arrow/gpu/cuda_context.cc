@@ -20,6 +20,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -108,6 +109,16 @@ class CudaContext::CudaContextImpl {
     ContextSaver set_temporary(context_);
     CU_RETURN_NOT_OK(cuMemcpyDtoD(reinterpret_cast<CUdeviceptr>(dst),
                                   reinterpret_cast<const CUdeviceptr>(src),
+                                  static_cast<size_t>(nbytes)));
+    return Status::OK();
+  }
+
+  Status CopyDeviceToAnotherDevice(const std::shared_ptr<CudaContext>& dst_ctx, void* dst,
+                                   const void* src, int64_t nbytes) {
+    ContextSaver set_temporary(context_);
+    CU_RETURN_NOT_OK(cuMemcpyPeer(reinterpret_cast<CUdeviceptr>(dst),
+                                  reinterpret_cast<CUcontext>(dst_ctx->handle()),
+                                  reinterpret_cast<const CUdeviceptr>(src), context_,
                                   static_cast<size_t>(nbytes)));
     return Status::OK();
   }
@@ -232,9 +243,16 @@ CudaDeviceManager::CudaDeviceManager() { impl_.reset(new CudaDeviceManagerImpl()
 std::unique_ptr<CudaDeviceManager> CudaDeviceManager::instance_ = nullptr;
 
 Status CudaDeviceManager::GetInstance(CudaDeviceManager** manager) {
-  if (!instance_) {
-    instance_.reset(new CudaDeviceManager());
-    RETURN_NOT_OK(instance_->impl_->Init());
+  static std::mutex mutex;
+  static std::atomic<bool> init_end(false);
+
+  if (!init_end) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (!init_end) {
+      instance_.reset(new CudaDeviceManager());
+      RETURN_NOT_OK(instance_->impl_->Init());
+      init_end = true;
+    }
   }
   *manager = instance_.get();
   return Status::OK();
@@ -301,6 +319,12 @@ Status CudaContext::CopyDeviceToDevice(void* dst, const void* src, int64_t nbyte
   return impl_->CopyDeviceToDevice(dst, src, nbytes);
 }
 
+Status CudaContext::CopyDeviceToAnotherDevice(const std::shared_ptr<CudaContext>& dst_ctx,
+                                              void* dst, const void* src,
+                                              int64_t nbytes) {
+  return impl_->CopyDeviceToAnotherDevice(dst_ctx, dst, src, nbytes);
+}
+
 Status CudaContext::Synchronize(void) { return impl_->Synchronize(); }
 
 Status CudaContext::Close() { return impl_->Close(); }
@@ -342,6 +366,13 @@ int64_t CudaContext::bytes_allocated() const { return impl_->bytes_allocated(); 
 void* CudaContext::handle() const { return impl_->context_handle(); }
 
 int CudaContext::device_number() const { return impl_->device().device_num; }
+
+Status CudaContext::GetDeviceAddress(uint8_t* addr, uint8_t** devaddr) {
+  ContextSaver set_temporary(reinterpret_cast<CUcontext>(handle()));
+  CU_RETURN_NOT_OK(cuPointerGetAttribute(devaddr, CU_POINTER_ATTRIBUTE_DEVICE_POINTER,
+                                         reinterpret_cast<CUdeviceptr>(addr)));
+  return Status::OK();
+}
 
 }  // namespace cuda
 }  // namespace arrow

@@ -33,7 +33,6 @@
 #include "plasma/compat.h"
 
 #include "arrow/status.h"
-#include "arrow/util/logging.h"
 #ifdef PLASMA_CUDA
 #include "arrow/gpu/cuda_api.h"
 #endif
@@ -41,6 +40,23 @@
 namespace plasma {
 
 enum class ObjectLocation : int32_t { Local, Remote, Nonexistent };
+
+enum class PlasmaErrorCode : int8_t {
+  PlasmaObjectExists = 1,
+  PlasmaObjectNonexistent = 2,
+  PlasmaStoreFull = 3,
+  PlasmaObjectAlreadySealed = 4,
+};
+
+ARROW_EXPORT arrow::Status MakePlasmaError(PlasmaErrorCode code, std::string message);
+/// Return true iff the status indicates an already existing Plasma object.
+ARROW_EXPORT bool IsPlasmaObjectExists(const arrow::Status& status);
+/// Return true iff the status indicates a non-existent Plasma object.
+ARROW_EXPORT bool IsPlasmaObjectNonexistent(const arrow::Status& status);
+/// Return true iff the status indicates an already sealed Plasma object.
+ARROW_EXPORT bool IsPlasmaObjectAlreadySealed(const arrow::Status& status);
+/// Return true iff the status indicates the Plasma store reached its capacity limit.
+ARROW_EXPORT bool IsPlasmaStoreFull(const arrow::Status& status);
 
 constexpr int64_t kUniqueIDSize = 20;
 
@@ -70,8 +86,16 @@ enum class ObjectState : int {
   /// Object was created but not sealed in the local Plasma Store.
   PLASMA_CREATED = 1,
   /// Object is sealed and stored in the local Plasma Store.
-  PLASMA_SEALED
+  PLASMA_SEALED = 2,
+  /// Object is evicted to external store.
+  PLASMA_EVICTED = 3,
 };
+
+namespace internal {
+
+struct CudaIpcPlaceholder {};
+
+}  //  namespace internal
 
 /// This type is used by the Plasma store. It is here because it is exposed to
 /// the eviction policy.
@@ -94,10 +118,6 @@ struct ObjectTableEntry {
   int64_t data_size;
   /// Size of the object metadata in bytes.
   int64_t metadata_size;
-#ifdef PLASMA_CUDA
-  /// IPC GPU handle to share with clients.
-  std::shared_ptr<::arrow::cuda::CudaIpcMemHandle> ipc_handle;
-#endif
   /// Number of clients currently using this object.
   int ref_count;
   /// Unix epoch of when this object was created.
@@ -109,6 +129,13 @@ struct ObjectTableEntry {
   ObjectState state;
   /// The digest of the object. Used to see if two objects are the same.
   unsigned char digest[kDigestSize];
+
+#ifdef PLASMA_CUDA
+  /// IPC GPU handle to share with clients.
+  std::shared_ptr<::arrow::cuda::CudaIpcMemHandle> ipc_handle;
+#else
+  std::shared_ptr<internal::CudaIpcPlaceholder> ipc_handle;
+#endif
 };
 
 /// Mapping from ObjectIDs to information about the object.

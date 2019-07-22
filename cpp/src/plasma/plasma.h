@@ -38,13 +38,16 @@
 #include "arrow/util/logging.h"
 #include "arrow/util/macros.h"
 #include "plasma/common.h"
-#include "plasma/common_generated.h"
 
 #ifdef PLASMA_CUDA
 using arrow::cuda::CudaIpcMemHandle;
 #endif
 
 namespace plasma {
+
+namespace flatbuf {
+struct ObjectInfoT;
+}  // namespace flatbuf
 
 #define HANDLE_SIGPIPE(s, fd_)                                              \
   do {                                                                      \
@@ -88,6 +91,16 @@ struct PlasmaObject {
   int64_t metadata_size;
   /// Device number object is on.
   int device_num;
+
+  bool operator==(const PlasmaObject& other) const {
+    return (
+#ifdef PLASMA_CUDA
+        (ipc_handle == other.ipc_handle) &&
+#endif
+        (store_fd == other.store_fd) && (data_offset == other.data_offset) &&
+        (metadata_offset == other.metadata_offset) && (data_size == other.data_size) &&
+        (metadata_size == other.metadata_size) && (device_num == other.device_num));
+  }
 };
 
 enum class ObjectStatus : int {
@@ -101,9 +114,6 @@ enum class ObjectStatus : int {
 struct PlasmaStoreInfo {
   /// Objects that are in the Plasma store.
   ObjectTable objects;
-  /// The amount of memory (in bytes) that we allow to be allocated in the
-  /// store.
-  int64_t memory_capacity;
   /// Boolean flag indicating whether to start the object store with hugepages
   /// support enabled. Huge pages are substantially larger than normal memory
   /// pages (e.g. 2MB or 1GB instead of 4KB) and using them can reduce

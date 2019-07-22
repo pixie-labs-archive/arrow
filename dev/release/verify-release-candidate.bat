@@ -46,19 +46,16 @@ call conda create -p %_VERIFICATION_CONDA_ENV% -f -q -y python=%PYTHON% || exit 
 call activate %_VERIFICATION_CONDA_ENV% || exit /B
 
 call conda install -y ^
-      six pytest setuptools numpy pandas cython ^
-      thrift-cpp flatbuffers rapidjson ^
-      cmake ^
-      git ^
-      boost-cpp ^
-      snappy zlib brotli gflags lz4-c zstd -c conda-forge || exit /B
+     python=3.7 ^
+     git ^
+     --file=ci\conda_env_cpp.yml ^
+     --file=ci\conda_env_python.yml ^
+     -c conda-forge || exit /B
 
 set GENERATOR=Visual Studio 14 2015 Win64
 set CONFIGURATION=release
 
 pushd %ARROW_SOURCE%
-
-set ARROW_BUILD_TOOLCHAIN=%CONDA_PREFIX%\Library
 
 set ARROW_HOME=%INSTALL_DIR%
 set PARQUET_HOME=%INSTALL_DIR%
@@ -74,8 +71,11 @@ call "C:\Program Files (x86)\Microsoft Visual Studio\2017\Community\Common7\Tool
 cmake -G "%GENERATOR%" ^
       -DCMAKE_INSTALL_PREFIX=%ARROW_HOME% ^
       -DARROW_BOOST_USE_SHARED=ON ^
+      -DARROW_BUILD_TESTS=ON ^
+      -DGTest_SOURCE=BUNDLED ^
       -DCMAKE_BUILD_TYPE=%CONFIGURATION% ^
       -DARROW_CXXFLAGS="/MP" ^
+      -DARROW_FLIGHT=ON ^
       -DARROW_PYTHON=ON ^
       -DARROW_PARQUET=ON ^
       ..  || exit /B
@@ -85,6 +85,9 @@ cmake --build . --target INSTALL --config %CONFIGURATION%  || exit /B
 git clone https://github.com/apache/parquet-testing.git %_VERIFICATION_DIR%\parquet-testing
 set PARQUET_TEST_DATA=%_VERIFICATION_DIR%\parquet-testing\data
 
+git clone https://github.com/apache/arrow-testing.git %_VERIFICATION_DIR%\arrow-testing
+set ARROW_TEST_DATA=%_VERIFICATION_DIR%\arrow-testing\data
+
 @rem Needed so python-test.exe works
 set PYTHONPATH=%CONDA_PREFIX%\Lib;%CONDA_PREFIX%\Lib\site-packages;%CONDA_PREFIX%\python35.zip;%CONDA_PREFIX%\DLLs;%CONDA_PREFIX%;%PYTHONPATH%
 
@@ -92,11 +95,11 @@ ctest -VV  || exit /B
 popd
 
 @rem Build and import pyarrow
-@rem parquet-cpp has some additional runtime dependencies that we need to figure out
-@rem see PARQUET-1018
 pushd %ARROW_SOURCE%\python
 
-python setup.py build_ext --inplace --with-parquet --bundle-arrow-cpp bdist_wheel  || exit /B
+set PYARROW_WITH_FLIGHT=1
+set PYARROW_WITH_PARQUET=1
+python setup.py build_ext --inplace --bundle-arrow-cpp bdist_wheel  || exit /B
 py.test pyarrow -v -s --parquet || exit /B
 
 popd

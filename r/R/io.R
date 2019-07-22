@@ -21,7 +21,11 @@
 
 # OutputStream ------------------------------------------------------------
 
-`arrow::io::Writable` <- R6Class("arrow::io::Writable", inherit = `arrow::Object`)
+`arrow::io::Writable` <- R6Class("arrow::io::Writable", inherit = `arrow::Object`,
+  public = list(
+    write = function(x) io___Writable__write(self, buffer(x))
+  )
+)
 
 #' @title OutputStream
 #'
@@ -38,7 +42,8 @@
 #' @name arrow__io__OutputStream
 `arrow::io::OutputStream` <- R6Class("arrow::io::OutputStream", inherit = `arrow::io::Writable`,
   public = list(
-    close = function() io___OutputStream__Close(self)
+    close = function() io___OutputStream__Close(self),
+    tell = function() io___OutputStream__Tell(self)
   )
 )
 
@@ -169,7 +174,22 @@
     GetSize = function() io___RandomAccessFile__GetSize(self),
     supports_zero_copy = function() io___RandomAccessFile__supports_zero_copy(self),
     Seek = function(position) io___RandomAccessFile__Seek(self, position),
-    Tell = function() io___RandomAccessFile__Tell(self)
+    Tell = function() io___RandomAccessFile__Tell(self),
+
+    Read = function(nbytes = NULL) {
+      if (is.null(nbytes)) {
+        shared_ptr(`arrow::Buffer`, io___RandomAccessFile__Read0(self))
+      } else {
+        shared_ptr(`arrow::Buffer`, io___Readable__Read(self, nbytes))
+      }
+    },
+
+    ReadAt = function(position, nbytes = NULL) {
+      if (is.null(nbytes)) {
+        nbytes <- self$GetSize() - position
+      }
+      shared_ptr(`arrow::Buffer`, io___RandomAccessFile__ReadAt(self, position, nbytes))
+    }
   )
 )
 

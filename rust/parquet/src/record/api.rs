@@ -74,6 +74,11 @@ pub trait RowAccessor {
     fn get_map(&self, i: usize) -> Result<&Map>;
 }
 
+/// Trait for formating fields within a Row.
+pub trait RowFormatter {
+    fn fmt(&self, i: usize) -> &fmt::Display;
+}
+
 /// Macro to generate type-safe get_xxx methods for primitive types,
 /// e.g. `get_bool`, `get_short`.
 macro_rules! row_primitive_accessor {
@@ -100,6 +105,13 @@ macro_rules! row_complex_accessor {
       }
     }
   }
+}
+
+impl RowFormatter for Row {
+    /// Get Display reference for a given field.
+    fn fmt(&self, i: usize) -> &fmt::Display {
+        &self.fields[i].1
+    }
 }
 
 impl RowAccessor for Row {
@@ -546,7 +558,8 @@ impl Field {
         match descr.physical_type() {
             PhysicalType::BYTE_ARRAY => match descr.logical_type() {
                 LogicalType::UTF8 | LogicalType::ENUM | LogicalType::JSON => {
-                    let value = unsafe { String::from_utf8_unchecked(value.data().to_vec()) };
+                    let value =
+                        unsafe { String::from_utf8_unchecked(value.data().to_vec()) };
                     Field::Str(value)
                 }
                 LogicalType::BSON | LogicalType::NONE => Field::Bytes(value),
@@ -598,11 +611,15 @@ impl fmt::Display for Field {
                     write!(f, "{:?}", value)
                 }
             }
-            Field::Decimal(ref value) => write!(f, "{}", convert_decimal_to_string(value)),
+            Field::Decimal(ref value) => {
+                write!(f, "{}", convert_decimal_to_string(value))
+            }
             Field::Str(ref value) => write!(f, "\"{}\"", value),
             Field::Bytes(ref value) => write!(f, "{:?}", value.data()),
             Field::Date(value) => write!(f, "{}", convert_date_to_string(value)),
-            Field::Timestamp(value) => write!(f, "{}", convert_timestamp_to_string(value)),
+            Field::Timestamp(value) => {
+                write!(f, "{}", convert_timestamp_to_string(value))
+            }
             Field::Group(ref fields) => write!(f, "{}", fields),
             Field::ListInternal(ref list) => {
                 let elems = &list.elements;
@@ -675,7 +692,8 @@ fn convert_decimal_to_string(decimal: &Decimal) -> String {
         }
         num_str.insert_str(negative as usize, "0.");
     } else {
-        // No zeroes need to be prepended to the unscaled value, simply insert decimal point.
+        // No zeroes need to be prepended to the unscaled value, simply insert decimal
+        // point.
         num_str.insert((point + negative) as usize, '.');
     }
 
@@ -770,7 +788,8 @@ mod tests {
         let row = Field::convert_int32(&descr, 14611);
         assert_eq!(row, Field::Date(14611));
 
-        let descr = make_column_descr![PhysicalType::INT32, LogicalType::DECIMAL, 0, 8, 2];
+        let descr =
+            make_column_descr![PhysicalType::INT32, LogicalType::DECIMAL, 0, 8, 2];
         let row = Field::convert_int32(&descr, 444);
         assert_eq!(row, Field::Decimal(Decimal::from_i32(444, 8, 2)));
     }
@@ -785,7 +804,8 @@ mod tests {
         let row = Field::convert_int64(&descr, 78239823);
         assert_eq!(row, Field::ULong(78239823));
 
-        let descr = make_column_descr![PhysicalType::INT64, LogicalType::TIMESTAMP_MILLIS];
+        let descr =
+            make_column_descr![PhysicalType::INT64, LogicalType::TIMESTAMP_MILLIS];
         let row = Field::convert_int64(&descr, 1541186529153);
         assert_eq!(row, Field::Timestamp(1541186529153));
 
@@ -793,7 +813,8 @@ mod tests {
         let row = Field::convert_int64(&descr, 2222);
         assert_eq!(row, Field::Long(2222));
 
-        let descr = make_column_descr![PhysicalType::INT64, LogicalType::DECIMAL, 0, 8, 2];
+        let descr =
+            make_column_descr![PhysicalType::INT64, LogicalType::DECIMAL, 0, 8, 2];
         let row = Field::convert_int64(&descr, 3333);
         assert_eq!(row, Field::Decimal(Decimal::from_i64(3333, 8, 2)));
     }
@@ -871,7 +892,8 @@ mod tests {
         assert_eq!(row, Field::Bytes(value));
 
         // DECIMAL
-        let descr = make_column_descr![PhysicalType::BYTE_ARRAY, LogicalType::DECIMAL, 0, 8, 2];
+        let descr =
+            make_column_descr![PhysicalType::BYTE_ARRAY, LogicalType::DECIMAL, 0, 8, 2];
         let value = ByteArray::from(vec![207, 200]);
         let row = Field::convert_byte_array(&descr, value.clone());
         assert_eq!(row, Field::Decimal(Decimal::from_bytes(value, 8, 2)));
@@ -1111,6 +1133,89 @@ mod tests {
             ]))
             .is_primitive()
         );
+    }
+
+    #[test]
+    fn test_row_primitive_field_fmt() {
+        // Primitives types
+        let row = make_row(vec![
+            ("00".to_string(), Field::Null),
+            ("01".to_string(), Field::Bool(false)),
+            ("02".to_string(), Field::Byte(3)),
+            ("03".to_string(), Field::Short(4)),
+            ("04".to_string(), Field::Int(5)),
+            ("05".to_string(), Field::Long(6)),
+            ("06".to_string(), Field::UByte(7)),
+            ("07".to_string(), Field::UShort(8)),
+            ("08".to_string(), Field::UInt(9)),
+            ("09".to_string(), Field::ULong(10)),
+            ("10".to_string(), Field::Float(11.1)),
+            ("11".to_string(), Field::Double(12.1)),
+            ("12".to_string(), Field::Str("abc".to_string())),
+            (
+                "13".to_string(),
+                Field::Bytes(ByteArray::from(vec![1, 2, 3, 4, 5])),
+            ),
+            ("14".to_string(), Field::Date(14611)),
+            ("15".to_string(), Field::Timestamp(1262391174000)),
+            ("16".to_string(), Field::Decimal(Decimal::from_i32(4, 7, 2))),
+        ]);
+
+        assert_eq!("null", format!("{}", row.fmt(0)));
+        assert_eq!("false", format!("{}", row.fmt(1)));
+        assert_eq!("3", format!("{}", row.fmt(2)));
+        assert_eq!("4", format!("{}", row.fmt(3)));
+        assert_eq!("5", format!("{}", row.fmt(4)));
+        assert_eq!("6", format!("{}", row.fmt(5)));
+        assert_eq!("7", format!("{}", row.fmt(6)));
+        assert_eq!("8", format!("{}", row.fmt(7)));
+        assert_eq!("9", format!("{}", row.fmt(8)));
+        assert_eq!("10", format!("{}", row.fmt(9)));
+        assert_eq!("11.1", format!("{}", row.fmt(10)));
+        assert_eq!("12.1", format!("{}", row.fmt(11)));
+        assert_eq!("\"abc\"", format!("{}", row.fmt(12)));
+        assert_eq!("[1, 2, 3, 4, 5]", format!("{}", row.fmt(13)));
+        assert_eq!(convert_date_to_string(14611), format!("{}", row.fmt(14)));
+        assert_eq!(
+            convert_timestamp_to_string(1262391174000),
+            format!("{}", row.fmt(15))
+        );
+        assert_eq!("0.04", format!("{}", row.fmt(16)));
+    }
+
+    #[test]
+    fn test_row_complex_field_fmt() {
+        // Complex types
+        let row = make_row(vec![
+            (
+                "00".to_string(),
+                Field::Group(make_row(vec![
+                    ("x".to_string(), Field::Null),
+                    ("Y".to_string(), Field::Int(2)),
+                ])),
+            ),
+            (
+                "01".to_string(),
+                Field::ListInternal(make_list(vec![
+                    Field::Int(2),
+                    Field::Int(1),
+                    Field::Null,
+                    Field::Int(12),
+                ])),
+            ),
+            (
+                "02".to_string(),
+                Field::MapInternal(make_map(vec![
+                    (Field::Int(1), Field::Float(1.2)),
+                    (Field::Int(2), Field::Float(4.5)),
+                    (Field::Int(3), Field::Float(2.3)),
+                ])),
+            ),
+        ]);
+
+        assert_eq!("{x: null, Y: 2}", format!("{}", row.fmt(0)));
+        assert_eq!("[2, 1, null, 12]", format!("{}", row.fmt(1)));
+        assert_eq!("{1 -> 1.2, 2 -> 4.5, 3 -> 2.3}", format!("{}", row.fmt(2)));
     }
 
     #[test]

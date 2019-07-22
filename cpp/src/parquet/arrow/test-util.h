@@ -25,11 +25,12 @@
 #include <vector>
 
 #include "arrow/api.h"
-#include "arrow/test-util.h"
+#include "arrow/testing/gtest_util.h"
+#include "arrow/testing/random.h"
 #include "arrow/type_traits.h"
 #include "arrow/util/decimal.h"
 
-#include "parquet/arrow/record_reader.h"
+#include "parquet/column_reader.h"
 
 namespace parquet {
 
@@ -428,26 +429,11 @@ Status MakeEmptyListsArray(int64_t size, std::shared_ptr<Array>* out_array) {
   return Status::OK();
 }
 
-static inline std::shared_ptr<::arrow::Column> MakeColumn(
-    const std::string& name, const std::shared_ptr<Array>& array, bool nullable) {
-  auto field = ::arrow::field(name, array->type(), nullable);
-  return std::make_shared<::arrow::Column>(field, array);
-}
-
-static inline std::shared_ptr<::arrow::Column> MakeColumn(
-    const std::string& name, const std::vector<std::shared_ptr<Array>>& arrays,
-    bool nullable) {
-  auto field = ::arrow::field(name, arrays[0]->type(), nullable);
-  return std::make_shared<::arrow::Column>(field, arrays);
-}
-
 std::shared_ptr<::arrow::Table> MakeSimpleTable(const std::shared_ptr<Array>& values,
                                                 bool nullable) {
-  std::shared_ptr<::arrow::Column> column = MakeColumn("col", values, nullable);
-  std::vector<std::shared_ptr<::arrow::Column>> columns({column});
-  std::vector<std::shared_ptr<::arrow::Field>> fields({column->field()});
-  auto schema = std::make_shared<::arrow::Schema>(fields);
-  return ::arrow::Table::Make(schema, columns);
+  auto carr = std::make_shared<::arrow::ChunkedArray>(values);
+  auto schema = ::arrow::schema({::arrow::field("col", values->type(), nullable)});
+  return ::arrow::Table::Make(schema, {carr});
 }
 
 template <typename T>
@@ -471,10 +457,11 @@ void ExpectArrayT(void* expected, Array* result) {
 template <>
 void ExpectArrayT<::arrow::BooleanType>(void* expected, Array* result) {
   ::arrow::BooleanBuilder builder;
-  EXPECT_OK(builder.AppendValues(reinterpret_cast<uint8_t*>(expected), result->length()));
+  ARROW_EXPECT_OK(
+      builder.AppendValues(reinterpret_cast<uint8_t*>(expected), result->length()));
 
   std::shared_ptr<Array> expected_array;
-  EXPECT_OK(builder.Finish(&expected_array));
+  ARROW_EXPECT_OK(builder.Finish(&expected_array));
   EXPECT_TRUE(result->Equals(*expected_array));
 }
 

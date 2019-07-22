@@ -20,7 +20,10 @@ FROM rustlang/rust:nightly
 # sadly cargo doesn't have a command to fetch and build the
 # dependencies without building the library itself
 ENV CARGO_TARGET_DIR=/build/rust
-ADD rust/Cargo.toml /arrow/rust/Cargo.toml
+COPY rust/Cargo.toml /arrow/rust/Cargo.toml
 WORKDIR /arrow/rust
 
-CMD cargo test
+ENV ARROW_TEST_DATA=/arrow/testing/data
+ENV PARQUET_TEST_DATA=/arrow/cpp/submodules/parquet-testing/data
+
+CMD ["cargo", "test"]

@@ -33,34 +33,44 @@ PYTHON_VERSION=$1
 CONDA_ENV_DIR=$TRAVIS_BUILD_DIR/pyarrow-test-$PYTHON_VERSION
 
 # We should use zlib in the target Python directory to avoid loading
-# wrong libpython on macOS at run-time. If we use zlib in
-# $ARROW_BUILD_TOOLCHAIN and libpython3.6m.dylib exists in both
-# $ARROW_BUILD_TOOLCHAIN and $CONDA_ENV_DIR, arrow-python-test uses
-# libpython3.6m.dylib on $ARROW_BUILD_TOOLCHAIN not $CONDA_ENV_DIR.
-# libpython3.6m.dylib on $ARROW_BUILD_TOOLCHAIN doesn't have NumPy. So
-# python-test fails.
+# the wrong libpython on macOS at run-time. Another zlib might sit in a
+# directory with a different libpython3.6m.dylib, and that libpython3.6m.dylib
+# may not have NumPy (which is required for python-test)
 export ZLIB_HOME=$CONDA_ENV_DIR
 
-if [ $ARROW_TRAVIS_PYTHON_JVM == "1" ]; then
-  CONDA_JVM_DEPS="jpype1"
+CONDA_FILES=""
+CONDA_PACKAGES=""
+
+if [ "$ARROW_TRAVIS_PYTHON_GANDIVA" == "1" ]; then
+    CONDA_FILES="$CONDA_FILES --file=$TRAVIS_BUILD_DIR/ci/conda_env_gandiva.yml"
+fi
+
+if [ "$ARROW_TRAVIS_PYTHON_JVM" == "1" ]; then
+    JPYPE_VERSION=0.6.3
+    CONDA_PACKAGES="$CONDA_PACKAGES jpype1=$JPYPE_VERSION"
 fi
 
 conda create -y -q -p $CONDA_ENV_DIR \
+      --file $TRAVIS_BUILD_DIR/ci/conda_env_cpp.yml \
+      --file $TRAVIS_BUILD_DIR/ci/conda_env_unix.yml \
       --file $TRAVIS_BUILD_DIR/ci/conda_env_python.yml \
-      cmake \
+      ${CONDA_FILES} \
+      nomkl \
       pip \
-      numpy=1.13.1 \
+      numpy=1.14 \
+      'libgfortran<4' \
       python=${PYTHON_VERSION} \
-      ${CONDA_JVM_DEPS}
+      compilers \
+      ${CONDA_PACKAGES}
 
 conda activate $CONDA_ENV_DIR
 
 python --version
 which python
 
-if [ "$ARROW_TRAVIS_PYTHON_DOCS" == "1" ] && [ "$PYTHON_VERSION" == "3.6" ]; then
+if [ "$ARROW_TRAVIS_PYTHON_DOCS" == "1" ]; then
   # Install documentation dependencies
-  conda install -y -c conda-forge --file ci/conda_env_sphinx.yml
+  conda install -y --file ci/conda_env_sphinx.yml
 fi
 
 # ARROW-2093: PyTorch increases the size of our conda dependency stack
@@ -73,30 +83,47 @@ fi
 # fi
 
 if [ $TRAVIS_OS_NAME != "osx" ]; then
-  conda install -y -c conda-forge tensorflow
+  conda install -y tensorflow
   PYARROW_PYTEST_FLAGS="$PYARROW_PYTEST_FLAGS --tensorflow"
 fi
 
 # Re-build C++ libraries with the right Python setup
+
+# Clear out prior build files
+rm -rf $ARROW_CPP_BUILD_DIR
 mkdir -p $ARROW_CPP_BUILD_DIR
 pushd $ARROW_CPP_BUILD_DIR
 
-# Clear out prior build files
-rm -rf *
 
 # XXX Can we simply reuse CMAKE_COMMON_FLAGS from travis_before_script_cpp.sh?
 CMAKE_COMMON_FLAGS="-DARROW_EXTRA_ERROR_CONTEXT=ON"
 
 PYTHON_CPP_BUILD_TARGETS="arrow_python-all plasma parquet"
 
-if [ $ARROW_TRAVIS_COVERAGE == "1" ]; then
+if [ "$ARROW_TRAVIS_FLIGHT" == "1" ]; then
+  CMAKE_COMMON_FLAGS="$CMAKE_COMMON_FLAGS -DARROW_FLIGHT=ON"
+fi
+
+if [ "$ARROW_TRAVIS_COVERAGE" == "1" ]; then
   CMAKE_COMMON_FLAGS="$CMAKE_COMMON_FLAGS -DARROW_GENERATE_COVERAGE=ON"
 fi
 
-if [ $ARROW_TRAVIS_PYTHON_GANDIVA == "1" ]; then
+if [ "$ARROW_TRAVIS_PYTHON_GANDIVA" == "1" ]; then
   CMAKE_COMMON_FLAGS="$CMAKE_COMMON_FLAGS -DARROW_GANDIVA=ON"
   PYTHON_CPP_BUILD_TARGETS="$PYTHON_CPP_BUILD_TARGETS gandiva"
 fi
+
+if [ "$ARROW_TRAVIS_VERBOSE" == "1" ]; then
+  CMAKE_COMMON_FLAGS="$CMAKE_COMMON_FLAGS -DARROW_VERBOSE_THIRDPARTY_BUILD=ON"
+fi
+
+if [ $TRAVIS_OS_NAME == "osx" ]; then
+  source $TRAVIS_BUILD_DIR/ci/travis_install_osx_sdk.sh
+fi
+
+# conda-forge sets the build flags by default to -02, skip this to speed up the build
+export CFLAGS=${CFLAGS//-O2}
+export CXXFLAGS=${CXXFLAGS//-O2}
 
 cmake -GNinja \
       $CMAKE_COMMON_FLAGS \
@@ -122,16 +149,14 @@ $ARROW_CPP_BUILD_DIR/$ARROW_BUILD_TYPE/arrow-python-test
 
 pushd $ARROW_PYTHON_DIR
 
-# Other stuff pip install
-pip install -q -r requirements.txt
-
-if [ "$PYTHON_VERSION" == "3.6" ]; then
-    pip install -q pickle5
-fi
+pip install -q pickle5
 if [ "$ARROW_TRAVIS_COVERAGE" == "1" ]; then
     export PYARROW_GENERATE_COVERAGE=1
     pip install -q coverage
 fi
+
+echo "=== pip list ==="
+pip list
 
 export PKG_CONFIG_PATH=$PKG_CONFIG_PATH:$ARROW_CPP_INSTALL/lib/pkgconfig
 
@@ -139,7 +164,10 @@ export PYARROW_BUILD_TYPE=$ARROW_BUILD_TYPE
 export PYARROW_WITH_PARQUET=1
 export PYARROW_WITH_PLASMA=1
 export PYARROW_WITH_ORC=1
-if [ $ARROW_TRAVIS_PYTHON_GANDIVA == "1" ]; then
+if [ "$ARROW_TRAVIS_FLIGHT" == "1" ]; then
+  export PYARROW_WITH_FLIGHT=1
+fi
+if [ "$ARROW_TRAVIS_PYTHON_GANDIVA" == "1" ]; then
   export PYARROW_WITH_GANDIVA=1
 fi
 
@@ -149,6 +177,9 @@ python setup.py develop
 python -c "import pyarrow.parquet"
 python -c "import pyarrow.plasma"
 python -c "import pyarrow.orc"
+
+# Ensure we do eagerly import pandas (or other expensive imports)
+python < scripts/test_imports.py
 
 echo "PLASMA_VALGRIND: $PLASMA_VALGRIND"
 
@@ -161,11 +192,14 @@ if [ $TRAVIS_OS_NAME == "linux" ]; then
     sudo bash -c "echo 2048 > /proc/sys/vm/nr_hugepages"
 fi
 
+# For core dump analysis
+ln -sf `which python` $TRAVIS_BUILD_DIR/current-exe
+
 # Need to run tests from the source tree for Cython coverage and conftest.py
 if [ "$ARROW_TRAVIS_COVERAGE" == "1" ]; then
     # Output Python coverage data in a persistent place
     export COVERAGE_FILE=$ARROW_PYTHON_COVERAGE_FILE
-    coverage run --append -m pytest $PYARROW_PYTEST_FLAGS pyarrow/tests
+    python -m coverage run --append -m pytest $PYARROW_PYTEST_FLAGS pyarrow/tests
 else
     python -m pytest $PYARROW_PYTEST_FLAGS pyarrow/tests
 fi
@@ -179,15 +213,15 @@ if [ "$ARROW_TRAVIS_COVERAGE" == "1" ]; then
     coverage xml -i -o $TRAVIS_BUILD_DIR/coverage.xml
     # Capture C++ coverage info
     pushd $TRAVIS_BUILD_DIR
-    lcov --quiet --directory . --capture --no-external --output-file coverage-python-tests.info \
-        2>&1 | grep -v "WARNING: no data found for /usr/include"
+    lcov --directory . --capture --no-external --output-file coverage-python-tests.info \
+        2>&1 | grep -v "ignoring data for external file"
     lcov --add-tracefile coverage-python-tests.info \
         --output-file $ARROW_CPP_COVERAGE_FILE
     rm coverage-python-tests.info
     popd   # $TRAVIS_BUILD_DIR
 fi
 
-if [ "$ARROW_TRAVIS_PYTHON_DOCS" == "1" ] && [ "$PYTHON_VERSION" == "3.6" ]; then
+if [ "$ARROW_TRAVIS_PYTHON_DOCS" == "1" ]; then
   pushd ../cpp/apidoc
   doxygen
   popd
@@ -197,7 +231,7 @@ fi
 
 popd  # $ARROW_PYTHON_DIR
 
-if [ "$ARROW_TRAVIS_PYTHON_BENCHMARKS" == "1" ] && [ "$PYTHON_VERSION" == "3.6" ]; then
+if [ "$ARROW_TRAVIS_PYTHON_BENCHMARKS" == "1" ]; then
   # Check the ASV benchmarking setup.
   # Unfortunately this won't ensure that all benchmarks succeed
   # (see https://github.com/airspeed-velocity/asv/issues/449)

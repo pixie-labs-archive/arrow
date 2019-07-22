@@ -15,13 +15,14 @@
 
 using System;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Apache.Arrow
 {
     public static class BitUtility
     {
-        private static readonly byte[] PopcountTable = new byte[]
-        {
+        private static readonly byte[] PopcountTable = {
             0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4, 1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5,
             1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,
             1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,
@@ -32,8 +33,7 @@ namespace Apache.Arrow
             3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7, 4, 5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8,
         };
 
-        private static readonly byte[] BitMask = new byte[]
-        {
+        private static readonly byte[] BitMask = {
             1, 2, 4, 8, 16, 32, 64, 128
         };
 
@@ -51,6 +51,20 @@ namespace Apache.Arrow
         public static void SetBit(Span<byte> data, int index)
         {
             data[index / 8] |= BitMask[index % 8];
+        }
+
+        public static void SetBit(Span<byte> data, int index, bool value)
+        {
+            var idx = index / 8;
+            var mod = index % 8;
+            data[idx] = value
+                ? (byte)(data[idx] | BitMask[mod])
+                : (byte)(data[idx] & ~BitMask[mod]);
+        }
+
+        public static void ToggleBit(Span<byte> data, int index)
+        {
+            data[index / 8] ^= BitMask[index % 8];
         }
 
         /// <summary>
@@ -99,8 +113,16 @@ namespace Apache.Arrow
         /// </summary>
         /// <param name="n">Integer to round.</param>
         /// <returns>Integer rounded to the nearest multiple of 64.</returns>
-        public static int RoundUpToMultipleOf64(int n) =>
+        public static long RoundUpToMultipleOf64(long n) =>
             RoundUpToMultiplePowerOfTwo(n, 64);
+
+        /// <summary>
+        /// Rounds an integer to the nearest multiple of 8.
+        /// </summary>
+        /// <param name="n">Integer to round.</param>
+        /// <returns>Integer rounded to the nearest multiple of 8.</returns>
+        public static long RoundUpToMultipleOf8(long n) =>
+            RoundUpToMultiplePowerOfTwo(n, 8);
 
         /// <summary>
         /// Rounds an integer up to the nearest multiple of factor, where
@@ -111,12 +133,29 @@ namespace Apache.Arrow
         /// <param name="n">Integer to round up.</param>
         /// <param name="factor">Power of two factor to round up to.</param>
         /// <returns>Integer rounded up to the nearest power of two.</returns>
-        public static int RoundUpToMultiplePowerOfTwo(int n, int factor)
+        public static long RoundUpToMultiplePowerOfTwo(long n, int factor)
         {
             // Assert that factor is a power of two.
             Debug.Assert(factor > 0 && (factor & (factor - 1)) == 0);
             return (n + (factor - 1)) & ~(factor - 1);
         }
+
+        /// <summary>
+        /// Calculates the number of bytes required to store n bits.
+        /// </summary>
+        /// <param name="n">number of bits</param>
+        /// <returns>number of bytes</returns>
+        public static int ByteCount(int n)
+        {
+            Debug.Assert(n >= 0);
+            return n / 8 + (n % 8 != 0 ? 1 : 0); // ceil(n / 8)
+        }
             
+        internal static int ReadInt32(ReadOnlyMemory<byte> value)
+        {
+            Debug.Assert(value.Length >= sizeof(int));
+
+            return Unsafe.ReadUnaligned<int>(ref MemoryMarshal.GetReference(value.Span));
+        }
     }
 }

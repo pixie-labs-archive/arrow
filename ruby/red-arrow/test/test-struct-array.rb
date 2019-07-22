@@ -31,27 +31,64 @@ class StructArrayTest < Test::Unit::TestCase
                      [1, nil, 2],
                    ],
                    [
-                     array[0].to_a,
-                     array[1].to_a,
+                     array.find_field(0).to_a,
+                     array.find_field(1).to_a,
                    ])
     end
   end
 
-  test("#[]") do
-    type = Arrow::StructDataType.new([
-      Arrow::Field.new("field1", :boolean),
-      Arrow::Field.new("field2", :uint64),
-    ])
-    builder = Arrow::StructArrayBuilder.new(type)
-    builder.append
-    builder.get_field_builder(0).append(true)
-    builder.get_field_builder(1).append(1)
-    builder.append
-    builder.get_field_builder(0).append(false)
-    builder.get_field_builder(1).append(2)
-    array = builder.finish
+  sub_test_case("instance methods") do
+    def setup
+      @data_type = Arrow::StructDataType.new(visible: {type: :boolean},
+                                             count: {type: :uint64})
+      @values = [
+        [true, 1],
+        [false, 2],
+      ]
+      @array = Arrow::StructArray.new(@data_type, @values)
+    end
 
-    assert_equal([[true, false], [1, 2]],
-                 [array[0].to_a, array[1].to_a])
+    test("#[]") do
+      assert_equal([
+                     Arrow::Struct.new(@array, 0),
+                     Arrow::Struct.new(@array, 1),
+                   ],
+                   @array.to_a)
+    end
+
+    test("#get_value") do
+      assert_equal([
+                     Arrow::Struct.new(@array, 0),
+                     Arrow::Struct.new(@array, 1),
+                   ],
+                   [
+                     @array.get_value(0),
+                     @array.get_value(1),
+                   ])
+    end
+
+    sub_test_case("#find_field") do
+      test("Integer") do
+        assert_equal([
+                       [true, false],
+                       [1, 2],
+                     ],
+                     [
+                       @array.find_field(0).to_a,
+                       @array.find_field(1).to_a,
+                     ])
+      end
+
+      test("String, Symbol") do
+        assert_equal([
+                       [true, false],
+                       [1, 2],
+                     ],
+                     [
+                       @array.find_field("visible").to_a,
+                       @array.find_field(:count).to_a,
+                     ])
+      end
+    end
   end
 end
