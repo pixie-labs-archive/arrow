@@ -25,6 +25,7 @@
 #include <string>
 #include <vector>
 
+#include "absl/numeric/int128.h"
 #include "arrow/status.h"
 #include "arrow/type_fwd.h"  // IWYU pragma: export
 #include "arrow/util/checked_cast.h"
@@ -73,6 +74,9 @@ struct Type {
 
     /// Signed 64-bit little-endian integer
     INT64,
+
+    /// (PL) 16-byte UINT type
+    UINT128,
 
     /// 2-byte floating point value
     HALF_FLOAT,
@@ -437,6 +441,13 @@ class ARROW_EXPORT Int64Type
     : public detail::IntegerTypeImpl<Int64Type, Type::INT64, int64_t> {
  public:
   std::string name() const override { return "int64"; }
+};
+
+/// Concrete type class for signed 64-bit integer data
+class ARROW_EXPORT UInt128Type
+  : public detail::IntegerTypeImpl<UInt128Type, Type::UINT128, absl::uint128> {
+ public:
+  std::string name() const override { return "uint128"; }
 };
 
 /// Concrete type class for 16-bit floating-point data

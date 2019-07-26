@@ -42,6 +42,7 @@ namespace arrow {
   ACTION(UInt32);                            \
   ACTION(Int64);                             \
   ACTION(UInt64);                            \
+  ACTION(UInt128);                           \
   ACTION(HalfFloat);                         \
   ACTION(Float);                             \
   ACTION(Double);                            \

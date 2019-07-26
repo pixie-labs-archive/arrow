@@ -21,6 +21,7 @@
 #include <memory>
 #include <vector>
 
+#include "absl/numeric/int128.h"
 #include "arrow/array.h"
 #include "arrow/array/builder_base.h"
 #include "arrow/type.h"
@@ -253,6 +254,7 @@ using UInt8Builder = NumericBuilder<UInt8Type>;
 using UInt16Builder = NumericBuilder<UInt16Type>;
 using UInt32Builder = NumericBuilder<UInt32Type>;
 using UInt64Builder = NumericBuilder<UInt64Type>;
+using UInt128Builder = NumericBuilder<UInt128Type>;
 
 using Int8Builder = NumericBuilder<Int8Type>;
 using Int16Builder = NumericBuilder<Int16Type>;

@@ -25,6 +25,7 @@
 #include <type_traits>
 #include <vector>
 
+#include "absl/strings/substitute.h"
 #include "arrow/array.h"
 #include "arrow/pretty_print.h"
 #include "arrow/record_batch.h"
@@ -174,6 +175,17 @@ class ArrayPrinter : public PrettyPrinter {
                 [&](int64_t i) { FormatDateTime(type->unit(), "%F %T", data[i], true); });
     return Status::OK();
   }
+
+  Status WriteDataValues(const UInt128Array& array) {
+    const absl::uint128* data = array.raw_values();
+    WriteValues(array,
+                [&](int64_t i) {
+                  auto datum = data[i];
+                  return absl::Substitute("$0 $1", absl::Uint128High64(datum), absl::Uint128Low64(datum));
+                });
+    return Status::OK();
+  }
+
 
   template <typename T>
   enable_if_time<typename T::TypeClass, Status> WriteDataValues(const T& array) {

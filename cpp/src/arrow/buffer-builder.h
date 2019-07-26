@@ -25,6 +25,7 @@
 #include <string>
 #include <utility>
 
+#include "absl/numeric/int128.h"
 #include "arrow/buffer.h"
 #include "arrow/status.h"
 #include "arrow/util/bit-util.h"
@@ -181,7 +182,7 @@ class TypedBufferBuilder;
 
 /// \brief A BufferBuilder for building a buffer of arithmetic elements
 template <typename T>
-class TypedBufferBuilder<T, typename std::enable_if<std::is_arithmetic<T>::value>::type> {
+  class TypedBufferBuilder<T, typename std::enable_if<std::is_arithmetic<T>::value || std::is_base_of_v<T, absl::uint128>>::type> {
  public:
   explicit TypedBufferBuilder(MemoryPool* pool ARROW_MEMORY_POOL_DEFAULT)
       : bytes_builder_(pool) {}

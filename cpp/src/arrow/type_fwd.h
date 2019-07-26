@@ -131,6 +131,7 @@ _NUMERIC_TYPE_DECL(UInt8)
 _NUMERIC_TYPE_DECL(UInt16)
 _NUMERIC_TYPE_DECL(UInt32)
 _NUMERIC_TYPE_DECL(UInt64)
+_NUMERIC_TYPE_DECL(UInt128)
 _NUMERIC_TYPE_DECL(HalfFloat)
 _NUMERIC_TYPE_DECL(Float)
 _NUMERIC_TYPE_DECL(Double)
@@ -210,6 +211,8 @@ std::shared_ptr<DataType> ARROW_EXPORT uint16();
 std::shared_ptr<DataType> ARROW_EXPORT uint32();
 /// \brief Return a UInt64Type instance
 std::shared_ptr<DataType> ARROW_EXPORT uint64();
+/// \brief Return a UInt128Type instance
+std::shared_ptr<DataType> ARROW_EXPORT uint128();
 /// \brief Return a HalfFloatType instance
 std::shared_ptr<DataType> ARROW_EXPORT float16();
 /// \brief Return a FloatType instance

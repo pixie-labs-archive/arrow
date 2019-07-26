@@ -23,6 +23,7 @@
 #include <type_traits>
 #include <vector>
 
+#include "absl/numeric/int128.h"
 #include "arrow/type_fwd.h"
 #include "arrow/util/bit-util.h"
 
@@ -103,6 +104,7 @@ PRIMITIVE_TYPE_TRAITS_DEF(uint32_t, UInt32, uint32)
 PRIMITIVE_TYPE_TRAITS_DEF(int32_t, Int32, int32)
 PRIMITIVE_TYPE_TRAITS_DEF(uint64_t, UInt64, uint64)
 PRIMITIVE_TYPE_TRAITS_DEF(int64_t, Int64, int64)
+PRIMITIVE_TYPE_TRAITS_DEF(absl::uint128, UInt128, uint128)
 PRIMITIVE_TYPE_TRAITS_DEF(float, Float, float32)
 PRIMITIVE_TYPE_TRAITS_DEF(double, Double, float64)
 
@@ -516,6 +518,7 @@ static inline bool is_integer(Type::type type_id) {
     case Type::INT32:
     case Type::UINT64:
     case Type::INT64:
+    case Type::UINT128:
       return true;
     default:
       break;
@@ -547,6 +550,7 @@ static inline bool is_primitive(Type::type type_id) {
     case Type::INT32:
     case Type::UINT64:
     case Type::INT64:
+    case Type::UINT128:
     case Type::HALF_FLOAT:
     case Type::FLOAT:
     case Type::DOUBLE:
