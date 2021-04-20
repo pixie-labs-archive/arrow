@@ -520,7 +520,10 @@ class ARROW_EXPORT Int64Type
 class ARROW_EXPORT UInt128Type
   : public detail::IntegerTypeImpl<UInt128Type, Type::UINT128, absl::uint128> {
  public:
-  std::string name() const override { return "uint128"; }
+  static constexpr const char* type_name() { return "uint128"; }
+
+ protected:
+  std::string ComputeFingerprint() const override;
 };
 
 /// Concrete type class for 16-bit floating-point data

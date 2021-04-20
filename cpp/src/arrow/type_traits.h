@@ -51,6 +51,7 @@ TYPE_ID_TRAIT(UINT8, UInt8Type)
 TYPE_ID_TRAIT(UINT16, UInt16Type)
 TYPE_ID_TRAIT(UINT32, UInt32Type)
 TYPE_ID_TRAIT(UINT64, UInt64Type)
+TYPE_ID_TRAIT(UINT128, UInt128Type)
 TYPE_ID_TRAIT(HALF_FLOAT, HalfFloatType)
 TYPE_ID_TRAIT(FLOAT, FloatType)
 TYPE_ID_TRAIT(DOUBLE, DoubleType)
@@ -829,6 +830,7 @@ static inline bool is_unsigned_integer(Type::type type_id) {
     case Type::UINT16:
     case Type::UINT32:
     case Type::UINT64:
+    case Type::UINT128:
       return true;
     default:
       break;
@@ -858,6 +860,7 @@ static inline bool is_primitive(Type::type type_id) {
     case Type::UINT32:
     case Type::INT32:
     case Type::UINT64:
+    case Type::UINT128:
     case Type::INT64:
     case Type::UINT128:
     case Type::HALF_FLOAT:
@@ -968,6 +971,8 @@ static inline int bit_width(Type::type type_id) {
     case Type::INTERVAL_DAY_TIME:
       return 64;
 
+    case Type::UINT128:
+      return 128;
     case Type::DECIMAL128:
       return 128;
     case Type::DECIMAL256:
