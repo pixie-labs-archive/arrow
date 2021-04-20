@@ -24,25 +24,61 @@
 #include "arrow/filesystem/filesystem.h"
 
 namespace arrow {
+namespace internal {
+
+class Uri;
+
+}
+
 namespace fs {
 
-/// \brief EXPERIMENTAL: a FileSystem implementation accessing files
-/// on the local machine.
+/// Options for the LocalFileSystem implementation.
+struct ARROW_EXPORT LocalFileSystemOptions {
+  /// Whether OpenInputStream and OpenInputFile return a mmap'ed file,
+  /// or a regular one.
+  bool use_mmap = false;
+
+  /// \brief Initialize with defaults
+  static LocalFileSystemOptions Defaults();
+
+  bool Equals(const LocalFileSystemOptions& other) const;
+
+  static Result<LocalFileSystemOptions> FromUri(const ::arrow::internal::Uri& uri,
+                                                std::string* out_path);
+};
+
+/// \brief A FileSystem implementation accessing files on the local machine.
 ///
-/// Details such as symlinks are abstracted away (symlinks are always followed,
-/// except when deleting an entry).
+/// This class handles only `/`-separated paths.  If desired, conversion
+/// from Windows backslash-separated paths should be done by the caller.
+/// Details such as symlinks are abstracted away (symlinks are always
+/// followed, except when deleting an entry).
 class ARROW_EXPORT LocalFileSystem : public FileSystem {
  public:
-  LocalFileSystem();
+  explicit LocalFileSystem(const io::IOContext& = io::default_io_context());
+  explicit LocalFileSystem(const LocalFileSystemOptions&,
+                           const io::IOContext& = io::default_io_context());
   ~LocalFileSystem() override;
 
-  using FileSystem::GetTargetStats;
-  Status GetTargetStats(const std::string& path, FileStats* out) override;
-  Status GetTargetStats(const Selector& select, std::vector<FileStats>* out) override;
+  std::string type_name() const override { return "local"; }
+
+  Result<std::string> NormalizePath(std::string path) override;
+
+  bool Equals(const FileSystem& other) const override;
+
+  LocalFileSystemOptions options() const { return options_; }
+
+  /// \cond FALSE
+  using FileSystem::GetFileInfo;
+  /// \endcond
+  Result<FileInfo> GetFileInfo(const std::string& path) override;
+  Result<std::vector<FileInfo>> GetFileInfo(const FileSelector& select) override;
 
   Status CreateDir(const std::string& path, bool recursive = true) override;
 
   Status DeleteDir(const std::string& path) override;
+  Status DeleteDirContents(const std::string& path) override;
+  Status DeleteRootDirContents() override;
 
   Status DeleteFile(const std::string& path) override;
 
@@ -50,18 +86,26 @@ class ARROW_EXPORT LocalFileSystem : public FileSystem {
 
   Status CopyFile(const std::string& src, const std::string& dest) override;
 
-  Status OpenInputStream(const std::string& path,
-                         std::shared_ptr<io::InputStream>* out) override;
+  Result<std::shared_ptr<io::InputStream>> OpenInputStream(
+      const std::string& path) override;
+  Result<std::shared_ptr<io::RandomAccessFile>> OpenInputFile(
+      const std::string& path) override;
+  Result<std::shared_ptr<io::OutputStream>> OpenOutputStream(
+      const std::string& path) override;
+  Result<std::shared_ptr<io::OutputStream>> OpenAppendStream(
+      const std::string& path) override;
 
-  Status OpenInputFile(const std::string& path,
-                       std::shared_ptr<io::RandomAccessFile>* out) override;
-
-  Status OpenOutputStream(const std::string& path,
-                          std::shared_ptr<io::OutputStream>* out) override;
-
-  Status OpenAppendStream(const std::string& path,
-                          std::shared_ptr<io::OutputStream>* out) override;
+ protected:
+  LocalFileSystemOptions options_;
 };
+
+namespace internal {
+
+// Return whether the string is detected as a local absolute path.
+ARROW_EXPORT
+bool DetectAbsolutePath(const std::string& s);
+
+}  // namespace internal
 
 }  // namespace fs
 }  // namespace arrow

@@ -15,13 +15,13 @@
 # specific language governing permissions and limitations
 # under the License.
 
-require "arrow/column-containable"
-require "arrow/group"
-require "arrow/record-containable"
+require "arrow/raw-table-converter"
 
 module Arrow
   class Table
     include ColumnContainable
+    include GenericFilterable
+    include GenericTakeable
     include RecordContainable
 
     class << self
@@ -83,14 +83,6 @@ module Arrow
     #     `Array`.
     #
     #   @example Create a table from column name and values
-    #     count_chunks = [
-    #       Arrow::UInt32Array.new([0, 2]),
-    #       Arrow::UInt32Array.new([nil, 4]),
-    #     ]
-    #     visible_chunks = [
-    #       Arrow::BooleanArray.new([true]),
-    #       Arrow::BooleanArray.new([nil, nil, false]),
-    #     ]
     #     Arrow::Table.new("count" => [0, 2, nil, 4],
     #                      "visible" => [true, nil, nil, false])
     #
@@ -171,22 +163,9 @@ module Arrow
       n_args = args.size
       case n_args
       when 1
-        if args[0][0].is_a?(Column)
-          columns = args[0]
-          fields = columns.collect(&:field)
-          values = columns.collect(&:data)
-          schema = Schema.new(fields)
-        else
-          raw_table = args[0]
-          fields = []
-          values = []
-          raw_table.each do |name, array|
-            array = ArrayBuilder.build(array) if array.is_a?(::Array)
-            fields << Field.new(name.to_s, array.value_data_type)
-            values << array
-          end
-          schema = Schema.new(fields)
-        end
+        raw_table_converter = RawTableConverter.new(args[0])
+        schema = raw_table_converter.schema
+        values = raw_table_converter.values
       when 2
         schema = args[0]
         schema = Schema.new(schema) unless schema.is_a?(Schema)
@@ -306,13 +285,15 @@ module Arrow
         end
       end
 
-      ranges = []
+      filter_options = Arrow::FilterOptions.new
+      filter_options.null_selection_behavior = :emit_null
+      sliced_tables = []
       slicers.each do |slicer|
         slicer = slicer.evaluate if slicer.respond_to?(:evaluate)
         case slicer
         when Integer
           slicer += n_rows if slicer < 0
-          ranges << [slicer, n_rows - 1]
+          sliced_tables << slice_by_range(slicer, n_rows - 1)
         when Range
           original_from = from = slicer.first
           to = slicer.last
@@ -325,17 +306,9 @@ module Arrow
             raise ArgumentError, message
           end
           to += n_rows if to < 0
-          ranges << [from, to]
-        when ::Array
-          boolean_array_to_slice_ranges(slicer, 0, ranges)
-        when ChunkedArray
-          offset = 0
-          slicer.each_chunk do |array|
-            boolean_array_to_slice_ranges(array, offset, ranges)
-            offset += array.length
-          end
-        when BooleanArray
-          boolean_array_to_slice_ranges(slicer, 0, ranges)
+          sliced_tables << slice_by_range(from, to)
+        when ::Array, BooleanArray, ChunkedArray
+          sliced_tables << filter(slicer, filter_options)
         else
           message = "slicer must be Integer, Range, (from, to), " +
             "Arrow::ChunkedArray of Arrow::BooleanArray, " +
@@ -343,7 +316,11 @@ module Arrow
           raise ArgumentError, message
         end
       end
-      slice_by_ranges(ranges)
+      if sliced_tables.size > 1
+        sliced_tables[0].concatenate(sliced_tables[1..-1])
+      else
+        sliced_tables[0]
+      end
     end
 
     # TODO
@@ -514,38 +491,8 @@ module Arrow
     end
 
     private
-    def boolean_array_to_slice_ranges(array, offset, ranges)
-      in_target = false
-      target_start = nil
-      array.each_with_index do |is_target, i|
-        if is_target
-          unless in_target
-            target_start = offset + i
-            in_target = true
-          end
-        else
-          if in_target
-            ranges << [target_start, offset + i - 1]
-            target_start = nil
-            in_target = false
-          end
-        end
-      end
-      if in_target
-        ranges << [target_start, offset + array.length - 1]
-      end
-    end
-
-    def slice_by_ranges(ranges)
-      sliced_table = []
-      ranges.each do |from, to|
-        sliced_table << slice_raw(from, to - from + 1)
-      end
-      if sliced_table.size > 1
-        sliced_table[0].concatenate(sliced_table[1..-1])
-      else
-        sliced_table[0]
-      end
+    def slice_by_range(from, to)
+      slice_raw(from, to - from + 1)
     end
 
     def ensure_raw_column(name, data)

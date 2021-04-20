@@ -18,7 +18,8 @@
 # specific language governing permissions and limitations
 # under the License.
 #
-set -e
+
+set -eux
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -34,28 +35,25 @@ if [ -z "${NUGET_API_KEY}" ]; then
   exit 1
 fi
 
-archive_name=apache-arrow-${version}
-tar_gz=${archive_name}.tar.gz
-rm -f ${tar_gz}
-curl \
-  --remote-name \
-  --fail \
-  https://www-us.apache.org/dist/arrow/arrow-${version}/${tar_gz}
-rm -rf ${archive_name}
-tar xf ${tar_gz}
-pushd ${archive_name}/csharp
-mv dummy.git ../.git
-dotnet pack -c Release
-mv ../.git dummy.git
-for package in artifacts/Apache.Arrow/Release/*.{nupkg,snupkg}; do
+base_names=()
+base_names+=(Apache.Arrow.${version})
+base_names+=(Apache.Arrow.Flight.${version})
+base_names+=(Apache.Arrow.Flight.AspNetCore.${version})
+for base_name in ${base_names[@]}; do
+  for extension in nupkg snupkg; do
+    path=${base_name}.${extension}
+    rm -f ${path}
+    curl \
+      --fail \
+      --location \
+      --remote-name \
+      https://apache.bintray.com/arrow/nuget/${version}/${path}
+  done
   dotnet nuget push \
-    ${package} \
+    ${base_name}.nupkg \
     -k ${NUGET_API_KEY} \
     -s https://api.nuget.org/v3/index.json
 done
-popd
-rm -rf ${archive_name}
-rm -f ${tar_gz}
 
 echo "Success! The released NuGet package is available here:"
 echo "  https://www.nuget.org/packages/Apache.Arrow/${version}"

@@ -52,15 +52,13 @@ std::vector<Decimal128> TestDecimal::MakeDecimalVector(std::vector<std::string> 
     int32_t str_precision;
     int32_t str_scale;
 
-    auto status = Decimal128::FromString(str, &str_value, &str_precision, &str_scale);
-    DCHECK_OK(status);
+    DCHECK_OK(Decimal128::FromString(str, &str_value, &str_precision, &str_scale));
 
     Decimal128 scaled_value;
     if (str_scale == scale) {
       scaled_value = str_value;
     } else {
-      status = str_value.Rescale(str_scale, scale, &scaled_value);
-      DCHECK_OK(status);
+      scaled_value = str_value.Rescale(str_scale, scale).ValueOrDie();
     }
     ret.push_back(scaled_value);
   }
@@ -303,6 +301,10 @@ TEST_F(TestDecimal, TestCompare) {
                             outputs[5]);  // greater_than_or_equal_to
 }
 
+// ARROW-9092: This test is conditionally disabled when building with LLVM 9
+// because it hangs.
+#if GANDIVA_LLVM_VERSION != 9
+
 TEST_F(TestDecimal, TestRoundFunctions) {
   // schema for input fields
   constexpr int32_t precision = 38;
@@ -406,6 +408,8 @@ TEST_F(TestDecimal, TestRoundFunctions) {
       outputs[6]);
 }
 
+#endif  // GANDIVA_LLVM_VERSION != 9
+
 TEST_F(TestDecimal, TestCastFunctions) {
   // schema for input fields
   constexpr int32_t precision = 38;
@@ -466,16 +470,14 @@ TEST_F(TestDecimal, TestCastFunctions) {
   DCHECK_OK(status);
 
   // Validate results
+  auto expected_int_dec = MakeArrowArrayDecimal(
+      decimal_type, MakeDecimalVector({"123", "158", "-123", "-158"}, scale), validity);
 
   // castDECIMAL(int32)
-  EXPECT_ARROW_ARRAY_EQUALS(
-      MakeArrowArrayDecimal(decimal_type,
-                            MakeDecimalVector({"123", "158", "-123", "-158"}, scale),
-                            validity),
-      outputs[0]);
+  EXPECT_ARROW_ARRAY_EQUALS(expected_int_dec, outputs[0]);
 
   // castDECIMAL(int64)
-  EXPECT_ARROW_ARRAY_EQUALS(array_dec, outputs[2]);
+  EXPECT_ARROW_ARRAY_EQUALS(expected_int_dec, outputs[1]);
 
   // castDECIMAL(float32)
   EXPECT_ARROW_ARRAY_EQUALS(array_dec, outputs[2]);
@@ -999,7 +1001,7 @@ TEST_F(TestDecimal, TestCastDecimalVarCharInvalidInput) {
   // Create a row-batch with some sample data
   int num_records = 5;
 
-  // imvalid input
+  // invalid input
   auto invalid_in = MakeArrowArrayUtf8({"a10.5134", "-0.0", "-0.1", "10.516", "-1000"},
                                        {true, false, true, true, true});
 
@@ -1066,4 +1068,127 @@ TEST_F(TestDecimal, TestVarCharDecimalNestedCast) {
   EXPECT_ARROW_ARRAY_EQUALS(array_dec_res, outputs[0]);
 }
 
+TEST_F(TestDecimal, TestCastDecimalOverflow) {
+  // schema for input fields
+  constexpr int32_t precision_in = 5;
+  constexpr int32_t scale_in = 2;
+  constexpr int32_t precision_out = 3;
+  constexpr int32_t scale_out = 1;
+  auto decimal_5_2 = std::make_shared<arrow::Decimal128Type>(precision_in, scale_in);
+  auto decimal_3_1 = std::make_shared<arrow::Decimal128Type>(precision_out, scale_out);
+
+  auto field_dec = field("dec", decimal_5_2);
+  auto schema = arrow::schema({field_dec});
+
+  // build expressions
+  auto exprs = std::vector<ExpressionPtr>{
+      TreeExprBuilder::MakeExpression("castDECIMAL", {field_dec},
+                                      field("dec_to_dec", decimal_3_1)),
+      TreeExprBuilder::MakeExpression("castDECIMALNullOnOverflow", {field_dec},
+                                      field("dec_to_dec_null_overflow", decimal_3_1)),
+  };
+
+  // Build a projector for the expression.
+  std::shared_ptr<Projector> projector;
+  auto status = Projector::Make(schema, exprs, TestConfiguration(), &projector);
+  DCHECK_OK(status);
+
+  // Create a row-batch with some sample data
+  int num_records = 4;
+  auto validity = {true, true, true, true};
+
+  auto array_dec = MakeArrowArrayDecimal(
+      decimal_5_2, MakeDecimalVector({"1.23", "671.58", "-1.23", "-1.58"}, scale_in),
+      validity);
+
+  // prepare input record batch
+  auto in_batch = arrow::RecordBatch::Make(schema, num_records, {array_dec});
+
+  // Evaluate expression
+  arrow::ArrayVector outputs;
+  status = projector->Evaluate(*in_batch, pool_, &outputs);
+  DCHECK_OK(status);
+
+  // Validate results
+  // castDECIMAL(decimal)
+  EXPECT_ARROW_ARRAY_EQUALS(
+      MakeArrowArrayDecimal(arrow::decimal(precision_out, 1),
+                            MakeDecimalVector({"1.2", "0.0", "-1.2", "-1.6"}, 1),
+                            validity),
+      outputs[0]);
+
+  // castDECIMALNullOnOverflow(decimal)
+  EXPECT_ARROW_ARRAY_EQUALS(
+      MakeArrowArrayDecimal(arrow::decimal(precision_out, 1),
+                            MakeDecimalVector({"1.2", "1.6", "-1.2", "-1.6"}, 1),
+                            {true, false, true, true}),
+      outputs[1]);
+}
+
+TEST_F(TestDecimal, TestSha) {
+  // schema for input fields
+  const std::shared_ptr<arrow::DataType>& decimal_5_2 = arrow::decimal128(5, 2);
+  auto field_a = field("a", decimal_5_2);
+  auto schema = arrow::schema({field_a});
+
+  // output fields
+  auto res_0 = field("res0", utf8());
+  auto res_1 = field("res1", utf8());
+
+  // build expressions.
+  // hashSHA1(a)
+  auto node_a = TreeExprBuilder::MakeField(field_a);
+  auto hashSha1 = TreeExprBuilder::MakeFunction("hashSHA1", {node_a}, utf8());
+  auto expr_0 = TreeExprBuilder::MakeExpression(hashSha1, res_0);
+
+  auto hashSha256 = TreeExprBuilder::MakeFunction("hashSHA256", {node_a}, utf8());
+  auto expr_1 = TreeExprBuilder::MakeExpression(hashSha256, res_1);
+
+  // Build a projector for the expressions.
+  std::shared_ptr<Projector> projector;
+  auto status =
+      Projector::Make(schema, {expr_0, expr_1}, TestConfiguration(), &projector);
+  ASSERT_OK(status) << status.message();
+
+  // Create a row-batch with some sample data
+  int num_records = 3;
+  auto validity_array = {false, true, true};
+
+  auto array_dec = MakeArrowArrayDecimal(
+      decimal_5_2, MakeDecimalVector({"3.45", "0", "0.01"}, 2), validity_array);
+
+  // prepare input record batch
+  auto in_batch = arrow::RecordBatch::Make(schema, num_records, {array_dec});
+
+  // Evaluate expression
+  arrow::ArrayVector outputs;
+  status = projector->Evaluate(*in_batch, pool_, &outputs);
+  ASSERT_OK(status);
+
+  auto response = outputs.at(0);
+  EXPECT_EQ(response->null_count(), 0);
+  EXPECT_NE(response->GetScalar(0).ValueOrDie()->ToString(), "");
+
+  // Checks if the hash size in response is correct
+  const int sha1_hash_size = 40;
+  for (int i = 1; i < num_records; ++i) {
+    const auto& value_at_position = response->GetScalar(i).ValueOrDie()->ToString();
+
+    EXPECT_EQ(value_at_position.size(), sha1_hash_size);
+    EXPECT_NE(value_at_position, response->GetScalar(i - 1).ValueOrDie()->ToString());
+  }
+
+  response = outputs.at(1);
+  EXPECT_EQ(response->null_count(), 0);
+  EXPECT_NE(response->GetScalar(0).ValueOrDie()->ToString(), "");
+
+  // Checks if the hash size in response is correct
+  const int sha256_hash_size = 64;
+  for (int i = 1; i < num_records; ++i) {
+    const auto& value_at_position = response->GetScalar(i).ValueOrDie()->ToString();
+
+    EXPECT_EQ(value_at_position.size(), sha256_hash_size);
+    EXPECT_NE(value_at_position, response->GetScalar(i - 1).ValueOrDie()->ToString());
+  }
+}
 }  // namespace gandiva

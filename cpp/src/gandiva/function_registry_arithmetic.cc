@@ -37,10 +37,12 @@ std::vector<NativeFunction> GetArithmeticFunctionRegistry() {
   static std::vector<NativeFunction> arithmetic_fn_registry_ = {
       UNARY_SAFE_NULL_IF_NULL(not, {}, boolean, boolean),
       UNARY_SAFE_NULL_IF_NULL(castBIGINT, {}, int32, int64),
+      UNARY_SAFE_NULL_IF_NULL(castINT, {}, int64, int32),
       UNARY_SAFE_NULL_IF_NULL(castBIGINT, {}, decimal128, int64),
 
       // cast to float32
       UNARY_CAST_TO_FLOAT32(int32), UNARY_CAST_TO_FLOAT32(int64),
+      UNARY_CAST_TO_FLOAT32(float64),
 
       // cast to float64
       UNARY_CAST_TO_FLOAT64(int32), UNARY_CAST_TO_FLOAT64(int64),
@@ -54,7 +56,13 @@ std::vector<NativeFunction> GetArithmeticFunctionRegistry() {
       UNARY_SAFE_NULL_IF_NULL(castDECIMAL, {}, decimal128, decimal128),
       UNARY_UNSAFE_NULL_IF_NULL(castDECIMAL, {}, utf8, decimal128),
 
+      NativeFunction("castDECIMALNullOnOverflow", {}, DataTypeVector{decimal128()},
+                     decimal128(), kResultNullInternal,
+                     "castDECIMALNullOnOverflow_decimal128"),
+
       UNARY_SAFE_NULL_IF_NULL(castDATE, {}, int64, date64),
+      UNARY_SAFE_NULL_IF_NULL(castDATE, {}, int32, date32),
+      UNARY_SAFE_NULL_IF_NULL(castDATE, {}, date32, date64),
 
       // add/sub/multiply/divide/mod
       BINARY_SYMMETRIC_FN(add, {}), BINARY_SYMMETRIC_FN(subtract, {}),
@@ -62,10 +70,6 @@ std::vector<NativeFunction> GetArithmeticFunctionRegistry() {
       NUMERIC_TYPES(BINARY_SYMMETRIC_UNSAFE_NULL_IF_NULL, divide, {}),
       BINARY_GENERIC_SAFE_NULL_IF_NULL(mod, {"modulo"}, int64, int32, int32),
       BINARY_GENERIC_SAFE_NULL_IF_NULL(mod, {"modulo"}, int64, int64, int64),
-      BINARY_SYMMETRIC_SAFE_NULL_IF_NULL(add, {}, decimal128),
-      BINARY_SYMMETRIC_SAFE_NULL_IF_NULL(subtract, {}, decimal128),
-      BINARY_SYMMETRIC_SAFE_NULL_IF_NULL(multiply, {}, decimal128),
-      BINARY_SYMMETRIC_UNSAFE_NULL_IF_NULL(divide, {}, decimal128),
       BINARY_SYMMETRIC_UNSAFE_NULL_IF_NULL(mod, {"modulo"}, decimal128),
       BINARY_SYMMETRIC_UNSAFE_NULL_IF_NULL(mod, {"modulo"}, float64),
       BINARY_SYMMETRIC_UNSAFE_NULL_IF_NULL(div, {}, int32),
@@ -73,13 +77,27 @@ std::vector<NativeFunction> GetArithmeticFunctionRegistry() {
       BINARY_SYMMETRIC_UNSAFE_NULL_IF_NULL(div, {}, float32),
       BINARY_SYMMETRIC_UNSAFE_NULL_IF_NULL(div, {}, float64),
 
+      // bitwise operators
+      BINARY_SYMMETRIC_SAFE_NULL_IF_NULL(bitwise_and, {}, int32),
+      BINARY_SYMMETRIC_SAFE_NULL_IF_NULL(bitwise_and, {}, int64),
+      BINARY_SYMMETRIC_SAFE_NULL_IF_NULL(bitwise_or, {}, int32),
+      BINARY_SYMMETRIC_SAFE_NULL_IF_NULL(bitwise_or, {}, int64),
+      BINARY_SYMMETRIC_SAFE_NULL_IF_NULL(bitwise_xor, {}, int32),
+      BINARY_SYMMETRIC_SAFE_NULL_IF_NULL(bitwise_xor, {}, int64),
+      UNARY_SAFE_NULL_IF_NULL(bitwise_not, {}, int32, int32),
+      UNARY_SAFE_NULL_IF_NULL(bitwise_not, {}, int64, int64),
+
+      // round functions
+      UNARY_SAFE_NULL_IF_NULL(round, {}, float32, float32),
+      UNARY_SAFE_NULL_IF_NULL(round, {}, float64, float64),
+      BINARY_GENERIC_SAFE_NULL_IF_NULL(round, {}, float32, int32, float32),
+      BINARY_GENERIC_SAFE_NULL_IF_NULL(round, {}, float64, int32, float64),
+      UNARY_SAFE_NULL_IF_NULL(round, {}, int32, int32),
+      UNARY_SAFE_NULL_IF_NULL(round, {}, int64, int64),
+      BINARY_GENERIC_SAFE_NULL_IF_NULL(round, {}, int32, int32, int32),
+      BINARY_GENERIC_SAFE_NULL_IF_NULL(round, {}, int64, int32, int64),
+
       // compare functions
-      BINARY_RELATIONAL_SAFE_NULL_IF_NULL(equal, {}, decimal128),
-      BINARY_RELATIONAL_SAFE_NULL_IF_NULL(not_equal, {}, decimal128),
-      BINARY_RELATIONAL_SAFE_NULL_IF_NULL(less_than, {}, decimal128),
-      BINARY_RELATIONAL_SAFE_NULL_IF_NULL(less_than_or_equal_to, {}, decimal128),
-      BINARY_RELATIONAL_SAFE_NULL_IF_NULL(greater_than, {}, decimal128),
-      BINARY_RELATIONAL_SAFE_NULL_IF_NULL(greater_than_or_equal_to, {}, decimal128),
       BINARY_RELATIONAL_BOOL_FN(equal, ({"eq", "same"})),
       BINARY_RELATIONAL_BOOL_FN(not_equal, {}),
       BINARY_RELATIONAL_BOOL_DATE_FN(less_than, {}),

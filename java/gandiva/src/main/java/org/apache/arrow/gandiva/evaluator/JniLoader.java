@@ -24,6 +24,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 import org.apache.arrow.gandiva.exceptions.GandivaException;
 
@@ -35,6 +37,8 @@ class JniLoader {
 
   private static volatile JniLoader INSTANCE;
   private static volatile long defaultConfiguration = 0L;
+  private static final ConcurrentMap<ConfigurationBuilder.ConfigOptions, Long> configurationMap
+          = new ConcurrentHashMap<>();
 
   private final JniWrapper wrapper;
 
@@ -110,6 +114,24 @@ class JniLoader {
     return wrapper;
   }
 
+  static long getConfiguration(ConfigurationBuilder.ConfigOptions configOptions) throws GandivaException {
+    if (!configurationMap.containsKey(configOptions)) {
+      synchronized (ConfigurationBuilder.class) {
+        if (!configurationMap.containsKey(configOptions)) {
+          JniLoader.getInstance(); // setup
+          long configInstance = new ConfigurationBuilder()
+                  .buildConfigInstance(configOptions);
+          configurationMap.put(configOptions, configInstance);
+          if (ConfigurationBuilder.ConfigOptions.getDefault().equals(configOptions)) {
+            defaultConfiguration = configInstance;
+          }
+          return configInstance;
+        }
+      }
+    }
+    return configurationMap.get(configOptions);
+  }
+
   /**
    * Get the default configuration to invoke gandiva.
    * @return default configuration
@@ -119,12 +141,30 @@ class JniLoader {
     if (defaultConfiguration == 0L) {
       synchronized (ConfigurationBuilder.class) {
         if (defaultConfiguration == 0L) {
-          JniLoader.getInstance();  // setup
+          JniLoader.getInstance(); // setup
+          ConfigurationBuilder.ConfigOptions defaultConfigOptons = ConfigurationBuilder.ConfigOptions.getDefault();
           defaultConfiguration = new ConfigurationBuilder()
-            .buildConfigInstance();
+            .buildConfigInstance(defaultConfigOptons);
+          configurationMap.put(defaultConfigOptons, defaultConfiguration);
         }
       }
     }
     return defaultConfiguration;
+  }
+
+  /**
+   * Remove the configuration.
+   */
+  static void removeConfiguration(ConfigurationBuilder.ConfigOptions configOptions) {
+    if (configurationMap.containsKey(configOptions)) {
+      synchronized (ConfigurationBuilder.class) {
+        if (configurationMap.containsKey(configOptions)) {
+          (new ConfigurationBuilder()).releaseConfigInstance(configurationMap.remove(configOptions));
+          if (configOptions.equals(ConfigurationBuilder.ConfigOptions.getDefault())) {
+            defaultConfiguration = 0;
+          }
+        }
+      }
+    }
   }
 }

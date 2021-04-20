@@ -15,4 +15,22 @@
 # specific language governing permissions and limitations
 # under the License.
 
-ADD_ARROW_EXAMPLE(row-wise-conversion-example)
+ADD_ARROW_EXAMPLE(row_wise_conversion_example)
+
+if (ARROW_PARQUET AND ARROW_DATASET)
+  if (ARROW_BUILD_SHARED)
+    set(DATASET_EXAMPLES_LINK_LIBS arrow_dataset_shared)
+  else()
+    set(DATASET_EXAMPLES_LINK_LIBS arrow_dataset_static)
+  endif()
+
+  ADD_ARROW_EXAMPLE(dataset_parquet_scan_example
+    EXTRA_LINK_LIBS
+    ${DATASET_EXAMPLES_LINK_LIBS})
+  add_dependencies(dataset_parquet_scan_example parquet)
+
+  ADD_ARROW_EXAMPLE(dataset_documentation_example
+    EXTRA_LINK_LIBS
+    ${DATASET_EXAMPLES_LINK_LIBS})
+  add_dependencies(dataset_documentation_example parquet)
+endif()

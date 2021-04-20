@@ -17,10 +17,6 @@
  * under the License.
  */
 
-#ifdef HAVE_CONFIG_H
-#  include <config.h>
-#endif
-
 #include <gandiva-glib/native-function.hpp>
 
 #include <gandiva-glib/function-signature.hpp>
@@ -99,7 +95,7 @@ ggandiva_native_function_class_init(GGandivaNativeFunctionClass *klass)
  * Returns: (element-type GGandivaFunctionSignature) (transfer full):
  *   A list of #GGandivaFunctionSignature supported by the native function.
  *
- * Since: 1.0.0
+ * Since: 0.15.0
  */
 GList *
 ggandiva_native_function_get_signatures(GGandivaNativeFunction *native_function)

@@ -18,14 +18,23 @@
 .. default-domain:: cpp
 .. highlight:: cpp
 
-Getting Started
-===============
+User Guide
+==========
 
 .. toctree::
 
    overview
    conventions
+   cmake
    memory
    arrays
    datatypes
    tables
+   compute
+   io
+   ipc
+   parquet
+   csv
+   json
+   dataset
+   flight

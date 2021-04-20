@@ -152,13 +152,6 @@ Status ConvertPyError(StatusCode code) {
   return Status(code, message, detail);
 }
 
-Status PassPyError() {
-  if (PyErr_Occurred()) {
-    return ConvertPyError();
-  }
-  return Status::OK();
-}
-
 bool IsPyError(const Status& status) {
   if (status.ok()) {
     return false;
@@ -195,12 +188,11 @@ Status PyBuffer::Init(PyObject* obj) {
   }
 }
 
-Status PyBuffer::FromPyObject(PyObject* obj, std::shared_ptr<Buffer>* out) {
+Result<std::shared_ptr<Buffer>> PyBuffer::FromPyObject(PyObject* obj) {
   PyBuffer* buf = new PyBuffer();
   std::shared_ptr<Buffer> res(buf);
   RETURN_NOT_OK(buf->Init(obj));
-  *out = res;
-  return Status::OK();
+  return res;
 }
 
 PyBuffer::~PyBuffer() {

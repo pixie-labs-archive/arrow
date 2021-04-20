@@ -45,6 +45,8 @@ perf.data
 perf.data.old
 
 cpp/.idea/
+.clangd/
+cpp/.clangd/
 cpp/apidoc/xml/
 docs/example.gz
 docs/example1.dat
@@ -58,9 +60,23 @@ python/doc/
 .idea/
 .pytest_cache/
 pkgs
-.Rproj.user
-arrow.Rcheck/
 docker_cache
 .gdb_history
-.DS_Store
 *.orig
+.*.swp
+.*.swo
+
+site/
+
+# R files
+**/.Rproj.user
+**/*.Rcheck/
+**/.Rhistory
+.Rproj.user
+
+# macOS
+cpp/Brewfile.lock.json
+.DS_Store
+
+# docker volumes used for caching
+.docker

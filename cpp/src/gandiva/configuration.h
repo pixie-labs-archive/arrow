@@ -21,7 +21,6 @@
 #include <string>
 
 #include "arrow/status.h"
-
 #include "gandiva/visibility.h"
 
 namespace gandiva {
@@ -35,9 +34,22 @@ class GANDIVA_EXPORT Configuration {
  public:
   friend class ConfigurationBuilder;
 
+  Configuration() : optimize_(true), target_host_cpu_(true) {}
+  explicit Configuration(bool optimize) : optimize_(optimize), target_host_cpu_(true) {}
+
   std::size_t Hash() const;
   bool operator==(const Configuration& other) const;
   bool operator!=(const Configuration& other) const;
+
+  bool optimize() const { return optimize_; }
+  bool target_host_cpu() const { return target_host_cpu_; }
+
+  void set_optimize(bool optimize) { optimize_ = optimize; }
+  void target_host_cpu(bool target_host_cpu) { target_host_cpu_ = target_host_cpu; }
+
+ private:
+  bool optimize_;        /* optimise the generated llvm IR */
+  bool target_host_cpu_; /* set the mcpu flag to host cpu while compiling llvm ir */
 };
 
 /// \brief configuration builder for gandiva
@@ -48,6 +60,11 @@ class GANDIVA_EXPORT ConfigurationBuilder {
  public:
   std::shared_ptr<Configuration> build() {
     std::shared_ptr<Configuration> configuration(new Configuration());
+    return configuration;
+  }
+
+  std::shared_ptr<Configuration> build(bool optimize) {
+    std::shared_ptr<Configuration> configuration(new Configuration(optimize));
     return configuration;
   }
 

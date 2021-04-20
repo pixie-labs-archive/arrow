@@ -21,16 +21,22 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.SeekableByteChannel;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.apache.arrow.flatbuf.Footer;
 import org.apache.arrow.memory.BufferAllocator;
+import org.apache.arrow.util.VisibleForTesting;
+import org.apache.arrow.vector.compression.CompressionCodec;
+import org.apache.arrow.vector.compression.NoCompressionCodec;
 import org.apache.arrow.vector.ipc.message.ArrowBlock;
 import org.apache.arrow.vector.ipc.message.ArrowDictionaryBatch;
 import org.apache.arrow.vector.ipc.message.ArrowFooter;
 import org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
 import org.apache.arrow.vector.ipc.message.MessageSerializer;
 import org.apache.arrow.vector.types.pojo.Schema;
+import org.apache.arrow.vector.validate.MetadataV4UnionChecker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -47,9 +53,19 @@ public class ArrowFileReader extends ArrowReader {
   private int currentDictionaryBatch = 0;
   private int currentRecordBatch = 0;
 
-  public ArrowFileReader(SeekableReadChannel in, BufferAllocator allocator) {
-    super(allocator);
+  public ArrowFileReader(
+      SeekableReadChannel in, BufferAllocator allocator, CompressionCodec.Factory compressionFactory) {
+    super(allocator, compressionFactory);
     this.in = in;
+  }
+
+  public ArrowFileReader(
+      SeekableByteChannel in, BufferAllocator allocator, CompressionCodec.Factory compressionFactory) {
+    this(new SeekableReadChannel(in), allocator, compressionFactory);
+  }
+
+  public ArrowFileReader(SeekableReadChannel in, BufferAllocator allocator) {
+    this(in, allocator, NoCompressionCodec.Factory.INSTANCE);
   }
 
   public ArrowFileReader(SeekableByteChannel in, BufferAllocator allocator) {
@@ -94,10 +110,42 @@ public class ArrowFileReader extends ArrowReader {
       Footer footerFB = Footer.getRootAsFooter(footerBuffer);
       this.footer = new ArrowFooter(footerFB);
     }
+    MetadataV4UnionChecker.checkRead(footer.getSchema(), footer.getMetadataVersion());
     return footer.getSchema();
   }
 
   @Override
+  public void initialize() throws IOException {
+    super.initialize();
+
+    // empty stream, has no dictionaries in IPC.
+    if (footer.getRecordBatches().size() == 0) {
+      return;
+    }
+    // Read and load all dictionaries from schema
+    for (int i = 0; i < dictionaries.size(); i++) {
+      ArrowDictionaryBatch dictionaryBatch = readDictionary();
+      loadDictionary(dictionaryBatch);
+    }
+  }
+
+  /**
+   * Get custom metadata.
+   */
+  public Map<String, String> getMetaData() {
+    if (footer != null) {
+      return footer.getMetaData();
+    }
+    return new HashMap<>();
+  }
+
+  /**
+   * Read a dictionary batch from the source, will be invoked after the schema has been read and
+   * called N times, where N is the number of dictionaries indicated by the schema Fields.
+   *
+   * @return the read ArrowDictionaryBatch
+   * @throws IOException on error
+   */
   public ArrowDictionaryBatch readDictionary() throws IOException {
     if (currentDictionaryBatch >= footer.getDictionaries().size()) {
       throw new IOException("Requested more dictionaries than defined in footer: " + currentDictionaryBatch);
@@ -146,6 +194,11 @@ public class ArrowFileReader extends ArrowReader {
     }
     currentRecordBatch = blockIndex;
     return loadNextBatch();
+  }
+
+  @VisibleForTesting
+  ArrowFooter getFooter() {
+    return footer;
   }
 
   private ArrowDictionaryBatch readDictionaryBatch(SeekableReadChannel in,

@@ -15,18 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#ifndef PARQUET_TYPES_H
-#define PARQUET_TYPES_H
+#pragma once
 
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
-#include <iterator>
 #include <memory>
 #include <sstream>
 #include <string>
 
+#include "arrow/util/string_view.h"
+
 #include "parquet/platform.h"
+#include "parquet/type_fwd.h"
 
 namespace arrow {
 namespace util {
@@ -70,7 +71,7 @@ struct Type {
 // Mirrors parquet::ConvertedType
 struct ConvertedType {
   enum type {
-    NONE,
+    NONE,  // Not a real converted type, but means no converted type is specified
     UTF8,
     MAP,
     MAP_KEY_VALUE,
@@ -93,9 +94,12 @@ struct ConvertedType {
     JSON,
     BSON,
     INTERVAL,
+    // DEPRECATED INVALID ConvertedType for all-null data.
+    // Only useful for reading legacy files written out by interim Parquet C++ releases.
+    // For writing, always emit LogicalType::Null instead.
+    // See PARQUET-1990.
     NA = 25,
-    // Should always be last element.
-    UNDEFINED = 26
+    UNDEFINED = 26  // Not a real converted type; should always be last element
   };
 };
 
@@ -139,7 +143,7 @@ class PARQUET_EXPORT LogicalType {
  public:
   struct Type {
     enum type {
-      UNKNOWN = 0,
+      UNDEFINED = 0,  // Not a real logical type
       STRING = 1,
       MAP,
       LIST,
@@ -150,11 +154,11 @@ class PARQUET_EXPORT LogicalType {
       TIMESTAMP,
       INTERVAL,
       INT,
-      NIL,  // Thrift NullType
+      NIL,  // Thrift NullType: annotates data that is always null
       JSON,
       BSON,
       UUID,
-      NONE
+      NONE  // Not a real logical type; should always be last element
     };
   };
 
@@ -198,12 +202,18 @@ class PARQUET_EXPORT LogicalType {
 
   static std::shared_ptr<const LogicalType> Interval();
   static std::shared_ptr<const LogicalType> Int(int bit_width, bool is_signed);
+
+  /// \brief Create a logical type for data that's always null
+  ///
+  /// Any physical type can be annotated with this logical type.
   static std::shared_ptr<const LogicalType> Null();
+
   static std::shared_ptr<const LogicalType> JSON();
   static std::shared_ptr<const LogicalType> BSON();
   static std::shared_ptr<const LogicalType> UUID();
+
+  /// \brief Create a placeholder for when no logical type is specified
   static std::shared_ptr<const LogicalType> None();
-  static std::shared_ptr<const LogicalType> Unknown();
 
   /// \brief Return true if this logical type is consistent with the given underlying
   /// physical type.
@@ -433,13 +443,13 @@ class PARQUET_EXPORT NoLogicalType : public LogicalType {
   NoLogicalType() = default;
 };
 
-/// \brief Allowed for any type.
-class PARQUET_EXPORT UnknownLogicalType : public LogicalType {
+// Internal API, for unrecognized logical types
+class PARQUET_EXPORT UndefinedLogicalType : public LogicalType {
  public:
   static std::shared_ptr<const LogicalType> Make();
 
  private:
-  UnknownLogicalType() = default;
+  UndefinedLogicalType() = default;
 };
 
 // Data encodings. Mirrors parquet::Encoding
@@ -452,25 +462,49 @@ struct Encoding {
     DELTA_BINARY_PACKED = 5,
     DELTA_LENGTH_BYTE_ARRAY = 6,
     DELTA_BYTE_ARRAY = 7,
-    RLE_DICTIONARY = 8
+    RLE_DICTIONARY = 8,
+    BYTE_STREAM_SPLIT = 9,
+    // Should always be last element (except UNKNOWN)
+    UNDEFINED = 10,
+    UNKNOWN = 999
   };
 };
 
-// Compression, mirrors parquet::CompressionCodec
-struct Compression {
-  enum type { UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD };
-};
+/// \brief Return true if Parquet supports indicated compression type
+PARQUET_EXPORT
+bool IsCodecSupported(Compression::type codec);
 
 PARQUET_EXPORT
-std::unique_ptr<::arrow::util::Codec> GetCodecFromArrow(Compression::type codec);
+std::unique_ptr<Codec> GetCodec(Compression::type codec);
 
-struct Encryption {
+PARQUET_EXPORT
+std::unique_ptr<Codec> GetCodec(Compression::type codec, int compression_level);
+
+struct ParquetCipher {
   enum type { AES_GCM_V1 = 0, AES_GCM_CTR_V1 = 1 };
+};
+
+struct AadMetadata {
+  std::string aad_prefix;
+  std::string aad_file_unique;
+  bool supply_aad_prefix;
+};
+
+struct EncryptionAlgorithm {
+  ParquetCipher::type algorithm;
+  AadMetadata aad;
 };
 
 // parquet::PageType
 struct PageType {
-  enum type { DATA_PAGE, INDEX_PAGE, DICTIONARY_PAGE, DATA_PAGE_V2 };
+  enum type {
+    DATA_PAGE,
+    INDEX_PAGE,
+    DICTIONARY_PAGE,
+    DATA_PAGE_V2,
+    // Should always be last element
+    UNDEFINED
+  };
 };
 
 class ColumnOrder {
@@ -493,6 +527,10 @@ class ColumnOrder {
 struct ByteArray {
   ByteArray() : len(0), ptr(NULLPTR) {}
   ByteArray(uint32_t len, const uint8_t* ptr) : len(len), ptr(ptr) {}
+
+  ByteArray(::arrow::util::string_view view)  // NOLINT implicit conversion
+      : ByteArray(static_cast<uint32_t>(view.size()),
+                  reinterpret_cast<const uint8_t*>(view.data())) {}
   uint32_t len;
   const uint8_t* ptr;
 };
@@ -545,11 +583,14 @@ static inline void Int96SetNanoSeconds(parquet::Int96& i96, int64_t nanoseconds)
 }
 
 static inline int64_t Int96GetNanoSeconds(const parquet::Int96& i96) {
-  int64_t days_since_epoch = i96.value[2] - kJulianToUnixEpochDays;
-  int64_t nanoseconds = 0;
+  // We do the computations in the unsigned domain to avoid unsigned behaviour
+  // on overflow.
+  uint64_t days_since_epoch =
+      i96.value[2] - static_cast<uint64_t>(kJulianToUnixEpochDays);
+  uint64_t nanoseconds = 0;
 
-  memcpy(&nanoseconds, &i96.value, sizeof(int64_t));
-  return days_since_epoch * kNanosecondsPerDay + nanoseconds;
+  memcpy(&nanoseconds, &i96.value, sizeof(uint64_t));
+  return static_cast<int64_t>(days_since_epoch * kNanosecondsPerDay + nanoseconds);
 }
 
 static inline std::string Int96ToString(const Int96& a) {
@@ -632,19 +673,19 @@ struct type_traits<Type::FIXED_LEN_BYTE_ARRAY> {
 };
 
 template <Type::type TYPE>
-struct DataType {
+struct PhysicalType {
   using c_type = typename type_traits<TYPE>::value_type;
   static constexpr Type::type type_num = TYPE;
 };
 
-using BooleanType = DataType<Type::BOOLEAN>;
-using Int32Type = DataType<Type::INT32>;
-using Int64Type = DataType<Type::INT64>;
-using Int96Type = DataType<Type::INT96>;
-using FloatType = DataType<Type::FLOAT>;
-using DoubleType = DataType<Type::DOUBLE>;
-using ByteArrayType = DataType<Type::BYTE_ARRAY>;
-using FLBAType = DataType<Type::FIXED_LEN_BYTE_ARRAY>;
+using BooleanType = PhysicalType<Type::BOOLEAN>;
+using Int32Type = PhysicalType<Type::INT32>;
+using Int64Type = PhysicalType<Type::INT64>;
+using Int96Type = PhysicalType<Type::INT96>;
+using FloatType = PhysicalType<Type::FLOAT>;
+using DoubleType = PhysicalType<Type::DOUBLE>;
+using ByteArrayType = PhysicalType<Type::BYTE_ARRAY>;
+using FLBAType = PhysicalType<Type::FIXED_LEN_BYTE_ARRAY>;
 
 template <typename Type>
 inline std::string format_fwf(int width) {
@@ -653,8 +694,6 @@ inline std::string format_fwf(int width) {
   return ss.str();
 }
 
-PARQUET_EXPORT std::string CompressionToString(Compression::type t);
-
 PARQUET_EXPORT std::string EncodingToString(Encoding::type t);
 
 PARQUET_EXPORT std::string ConvertedTypeToString(ConvertedType::type t);
@@ -662,11 +701,7 @@ PARQUET_EXPORT std::string ConvertedTypeToString(ConvertedType::type t);
 PARQUET_EXPORT std::string TypeToString(Type::type t);
 
 PARQUET_EXPORT std::string FormatStatValue(Type::type parquet_type,
-                                           const std::string& val);
-
-/// \deprecated Since 1.5.0
-ARROW_DEPRECATED("Use std::string instead of char* as input")
-PARQUET_EXPORT std::string FormatStatValue(Type::type parquet_type, const char* val);
+                                           ::arrow::util::string_view val);
 
 PARQUET_EXPORT int GetTypeByteSize(Type::type t);
 
@@ -679,5 +714,3 @@ PARQUET_EXPORT SortOrder::type GetSortOrder(
     const std::shared_ptr<const LogicalType>& logical_type, Type::type primitive);
 
 }  // namespace parquet
-
-#endif  // PARQUET_TYPES_H

@@ -19,15 +19,14 @@ package ipc // import "github.com/apache/arrow/go/arrow/ipc"
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
 	"io"
 
 	"github.com/apache/arrow/go/arrow"
 	"github.com/apache/arrow/go/arrow/array"
-	"github.com/apache/arrow/go/arrow/internal/bitutil"
+	"github.com/apache/arrow/go/arrow/bitutil"
 	"github.com/apache/arrow/go/arrow/internal/flatbuf"
 	"github.com/apache/arrow/go/arrow/memory"
-	"github.com/pkg/errors"
+	"golang.org/x/xerrors"
 )
 
 // FileReader is an Arrow file reader.
@@ -66,23 +65,23 @@ func NewFileReader(r ReadAtSeeker, opts ...Option) (*FileReader, error) {
 	if cfg.footer.offset <= 0 {
 		cfg.footer.offset, err = f.r.Seek(0, io.SeekEnd)
 		if err != nil {
-			return nil, errors.Wrap(err, "arrow/ipc: could retrieve footer offset")
+			return nil, xerrors.Errorf("arrow/ipc: could retrieve footer offset: %w", err)
 		}
 	}
 	f.footer.offset = cfg.footer.offset
 
 	err = f.readFooter()
 	if err != nil {
-		return nil, errors.Wrap(err, "arrow/ipc: could not decode footer")
+		return nil, xerrors.Errorf("arrow/ipc: could not decode footer: %w", err)
 	}
 
 	err = f.readSchema()
 	if err != nil {
-		return nil, errors.Wrap(err, "arrow/ipc: could not decode schema")
+		return nil, xerrors.Errorf("arrow/ipc: could not decode schema: %w", err)
 	}
 
 	if cfg.schema != nil && !cfg.schema.Equal(f.schema) {
-		return nil, errors.Errorf("arrow/ipc: inconsitent schema for reading (got: %v, want: %v)", f.schema, cfg.schema)
+		return nil, xerrors.Errorf("arrow/ipc: inconsistent schema for reading (got: %v, want: %v)", f.schema, cfg.schema)
 	}
 
 	return &f, err
@@ -92,17 +91,17 @@ func (f *FileReader) readFooter() error {
 	var err error
 
 	if f.footer.offset <= int64(len(Magic)*2+4) {
-		return fmt.Errorf("arrow/ipc: file too small (size=%d)", f.footer.offset)
+		return xerrors.Errorf("arrow/ipc: file too small (size=%d)", f.footer.offset)
 	}
 
 	eof := int64(len(Magic) + 4)
 	buf := make([]byte, eof)
 	n, err := f.r.ReadAt(buf, f.footer.offset-eof)
 	if err != nil {
-		return errors.Wrap(err, "arrow/ipc: could not read footer")
+		return xerrors.Errorf("arrow/ipc: could not read footer: %w", err)
 	}
 	if n != len(buf) {
-		return errors.Errorf("arrow/ipc: could not read %d bytes from end of file", len(buf))
+		return xerrors.Errorf("arrow/ipc: could not read %d bytes from end of file", len(buf))
 	}
 
 	if !bytes.Equal(buf[4:], Magic) {
@@ -117,10 +116,10 @@ func (f *FileReader) readFooter() error {
 	buf = make([]byte, size)
 	n, err = f.r.ReadAt(buf, f.footer.offset-size-eof)
 	if err != nil {
-		return errors.Wrap(err, "arrow/ipc: could not read footer data")
+		return xerrors.Errorf("arrow/ipc: could not read footer data: %w", err)
 	}
 	if n != len(buf) {
-		return errors.Errorf("arrow/ipc: could not read %d bytes from footer data", len(buf))
+		return xerrors.Errorf("arrow/ipc: could not read %d bytes from footer data", len(buf))
 	}
 
 	f.footer.buffer = memory.NewBufferBytes(buf)
@@ -132,32 +131,32 @@ func (f *FileReader) readSchema() error {
 	var err error
 	f.fields, err = dictTypesFromFB(f.footer.data.Schema(nil))
 	if err != nil {
-		return errors.Wrap(err, "arrow/ipc: could not load dictionary types from file")
+		return xerrors.Errorf("arrow/ipc: could not load dictionary types from file: %w", err)
 	}
 
 	for i := 0; i < f.NumDictionaries(); i++ {
 		blk, err := f.dict(i)
 		if err != nil {
-			return errors.Wrapf(err, "arrow/ipc: could read dictionary[%d]", i)
+			return xerrors.Errorf("arrow/ipc: could read dictionary[%d]: %w", i, err)
 		}
 		switch {
 		case !bitutil.IsMultipleOf8(blk.Offset):
-			return errors.Errorf("arrow/ipc: invalid file offset=%d for dictionary %d", blk.Offset, i)
+			return xerrors.Errorf("arrow/ipc: invalid file offset=%d for dictionary %d", blk.Offset, i)
 		case !bitutil.IsMultipleOf8(int64(blk.Meta)):
-			return errors.Errorf("arrow/ipc: invalid file metadata=%d position for dictionary %d", blk.Meta, i)
+			return xerrors.Errorf("arrow/ipc: invalid file metadata=%d position for dictionary %d", blk.Meta, i)
 		case !bitutil.IsMultipleOf8(blk.Body):
-			return errors.Errorf("arrow/ipc: invalid file body=%d position for dictionary %d", blk.Body, i)
+			return xerrors.Errorf("arrow/ipc: invalid file body=%d position for dictionary %d", blk.Body, i)
 		}
 
 		msg, err := blk.NewMessage()
 		if err != nil {
 			return err
 		}
-		defer msg.Release()
 
 		id, dict, err := readDictionary(msg.meta, f.fields, f.r)
+		msg.Release()
 		if err != nil {
-			return errors.Wrapf(err, "arrow/ipc: could not read dictionary %d from file", i)
+			return xerrors.Errorf("arrow/ipc: could not read dictionary %d from file: %w", i, err)
 		}
 		f.memo.Add(id, dict)
 		dict.Release() // memo.Add increases ref-count of dict.
@@ -165,11 +164,11 @@ func (f *FileReader) readSchema() error {
 
 	schema := f.footer.data.Schema(nil)
 	if schema == nil {
-		return errors.New("arrow/ipc: could not load schema from flatbuffer data")
+		return xerrors.Errorf("arrow/ipc: could not load schema from flatbuffer data")
 	}
 	f.schema, err = schemaFromFB(schema, &f.memo)
 	if err != nil {
-		return errors.Wrap(err, "arrow/ipc: could not read schema")
+		return xerrors.Errorf("arrow/ipc: could not read schema: %w", err)
 	}
 
 	return err
@@ -178,7 +177,7 @@ func (f *FileReader) readSchema() error {
 func (f *FileReader) block(i int) (fileBlock, error) {
 	var blk flatbuf.Block
 	if !f.footer.data.RecordBatches(&blk, i) {
-		return fileBlock{}, errors.Errorf("arrow/ipc: could not extract file block %d", i)
+		return fileBlock{}, xerrors.Errorf("arrow/ipc: could not extract file block %d", i)
 	}
 
 	return fileBlock{
@@ -192,7 +191,7 @@ func (f *FileReader) block(i int) (fileBlock, error) {
 func (f *FileReader) dict(i int) (fileBlock, error) {
 	var blk flatbuf.Block
 	if !f.footer.data.Dictionaries(&blk, i) {
-		return fileBlock{}, errors.Errorf("arrow/ipc: could not extract dictionary block %d", i)
+		return fileBlock{}, xerrors.Errorf("arrow/ipc: could not extract dictionary block %d", i)
 	}
 
 	return fileBlock{
@@ -245,6 +244,23 @@ func (f *FileReader) Close() error {
 // The returned value is valid until the next call to Record.
 // Users need to call Retain on that Record to keep it valid for longer.
 func (f *FileReader) Record(i int) (array.Record, error) {
+	record, err := f.RecordAt(i)
+	if err != nil {
+		return nil, err
+	}
+
+	if f.record != nil {
+		f.record.Release()
+	}
+
+	f.record = record
+	return record, nil
+}
+
+// Record returns the i-th record from the file. Ownership is transferred to the
+// caller and must call Release() to free the memory. This method is safe to
+// call concurrently.
+func (f *FileReader) RecordAt(i int) (array.Record, error) {
 	if i < 0 || i > f.NumRecords() {
 		panic("arrow/ipc: record index out of bounds")
 	}
@@ -255,11 +271,11 @@ func (f *FileReader) Record(i int) (array.Record, error) {
 	}
 	switch {
 	case !bitutil.IsMultipleOf8(blk.Offset):
-		return nil, errors.Errorf("arrow/ipc: invalid file offset=%d for record %d", blk.Offset, i)
+		return nil, xerrors.Errorf("arrow/ipc: invalid file offset=%d for record %d", blk.Offset, i)
 	case !bitutil.IsMultipleOf8(int64(blk.Meta)):
-		return nil, errors.Errorf("arrow/ipc: invalid file metadata=%d position for record %d", blk.Meta, i)
+		return nil, xerrors.Errorf("arrow/ipc: invalid file metadata=%d position for record %d", blk.Meta, i)
 	case !bitutil.IsMultipleOf8(blk.Body):
-		return nil, errors.Errorf("arrow/ipc: invalid file body=%d position for record %d", blk.Body, i)
+		return nil, xerrors.Errorf("arrow/ipc: invalid file body=%d position for record %d", blk.Body, i)
 	}
 
 	msg, err := blk.NewMessage()
@@ -269,15 +285,10 @@ func (f *FileReader) Record(i int) (array.Record, error) {
 	defer msg.Release()
 
 	if msg.Type() != MessageRecordBatch {
-		return nil, errors.Errorf("arrow/ipc: message %d is not a Record", i)
+		return nil, xerrors.Errorf("arrow/ipc: message %d is not a Record", i)
 	}
 
-	if f.record != nil {
-		f.record.Release()
-	}
-
-	f.record = newRecord(f.schema, msg.meta, bytes.NewReader(msg.body.Bytes()))
-	return f.record, nil
+	return newRecord(f.schema, msg.meta, bytes.NewReader(msg.body.Bytes())), nil
 }
 
 // Read reads the current record from the underlying stream and an error, if any.
@@ -301,16 +312,23 @@ func (f *FileReader) ReadAt(i int64) (array.Record, error) {
 
 func newRecord(schema *arrow.Schema, meta *memory.Buffer, body ReadAtSeeker) array.Record {
 	var (
-		msg = flatbuf.GetRootAsMessage(meta.Bytes(), 0)
-		md  flatbuf.RecordBatch
+		msg   = flatbuf.GetRootAsMessage(meta.Bytes(), 0)
+		md    flatbuf.RecordBatch
+		codec decompressor
 	)
 	initFB(&md, msg.Header)
 	rows := md.Length()
 
+	bodyCompress := md.Compression(nil)
+	if bodyCompress != nil {
+		codec = getDecompressor(bodyCompress.Codec())
+	}
+
 	ctx := &arrayLoaderContext{
 		src: ipcSource{
-			meta: &md,
-			r:    body,
+			meta:  &md,
+			r:     body,
+			codec: codec,
 		},
 		max: kMaxNestingDepth,
 	}
@@ -324,8 +342,9 @@ func newRecord(schema *arrow.Schema, meta *memory.Buffer, body ReadAtSeeker) arr
 }
 
 type ipcSource struct {
-	meta *flatbuf.RecordBatch
-	r    ReadAtSeeker
+	meta  *flatbuf.RecordBatch
+	r     ReadAtSeeker
+	codec decompressor
 }
 
 func (src *ipcSource) buffer(i int) *memory.Buffer {
@@ -337,10 +356,35 @@ func (src *ipcSource) buffer(i int) *memory.Buffer {
 		return memory.NewBufferBytes(nil)
 	}
 
-	raw := make([]byte, buf.Length())
-	_, err := src.r.ReadAt(raw, buf.Offset())
-	if err != nil {
-		panic(err)
+	var raw []byte
+	if src.codec == nil {
+		raw = make([]byte, buf.Length())
+		_, err := src.r.ReadAt(raw, buf.Offset())
+		if err != nil {
+			panic(err)
+		}
+	} else {
+		sr := io.NewSectionReader(src.r, buf.Offset(), buf.Length())
+		var uncompressedSize uint64
+
+		err := binary.Read(sr, binary.LittleEndian, &uncompressedSize)
+		if err != nil {
+			panic(err)
+		}
+
+		var r io.Reader = sr
+		// check for an uncompressed buffer
+		if int64(uncompressedSize) != -1 {
+			raw = make([]byte, uncompressedSize)
+			src.codec.Reset(sr)
+			r = src.codec
+		} else {
+			raw = make([]byte, buf.Length())
+		}
+
+		if _, err = io.ReadFull(r, raw); err != nil {
+			panic(err)
+		}
 	}
 
 	return memory.NewBufferBytes(raw)
@@ -406,7 +450,7 @@ func (ctx *arrayLoaderContext) loadArray(dt arrow.DataType) array.Interface {
 		return ctx.loadStruct(dt)
 
 	default:
-		panic(errors.Errorf("array type %T not handled yet", dt))
+		panic(xerrors.Errorf("array type %T not handled yet", dt))
 	}
 }
 
@@ -437,10 +481,8 @@ func (ctx *arrayLoaderContext) loadChild(dt arrow.DataType) array.Interface {
 }
 
 func (ctx *arrayLoaderContext) loadNull() array.Interface {
-	field, buffers := ctx.loadCommon(1)
-	buffers = append(buffers, ctx.buffer())
-
-	data := array.NewData(arrow.Null, int(field.Length()), buffers, nil, int(field.NullCount()), 0)
+	field := ctx.field()
+	data := array.NewData(arrow.Null, int(field.Length()), nil, nil, int(field.NullCount()), 0)
 	defer data.Release()
 
 	return array.MakeFromData(data)

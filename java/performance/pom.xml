@@ -14,11 +14,12 @@
     <parent>
         <artifactId>arrow-java-root</artifactId>
         <groupId>org.apache.arrow</groupId>
-        <version>1.0.0-SNAPSHOT</version>
+        <version>4.0.0-SNAPSHOT</version>
     </parent>
     <artifactId>arrow-performance</artifactId>
     <packaging>jar</packaging>
     <name>Arrow Performance Benchmarks</name>
+    <description>JMH Performance benchmarks for other Arrow libraries.</description>
 
     <dependencies>
         <dependency>
@@ -48,11 +49,45 @@
             <groupId>org.apache.arrow</groupId>
             <artifactId>arrow-vector</artifactId>
             <version>${project.version}</version>
+            <classifier>${arrow.vector.classifier}</classifier>
         </dependency>
         <dependency>
             <groupId>org.apache.arrow</groupId>
-            <artifactId>arrow-memory</artifactId>
+            <artifactId>arrow-memory-core</artifactId>
             <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-memory-netty</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.avro</groupId>
+            <artifactId>avro</artifactId>
+            <version>${dep.avro.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-avro</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <version>1.4.196</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-jdbc</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-algorithm</artifactId>
+            <version>4.0.0-SNAPSHOT</version>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 
@@ -61,6 +96,11 @@
         <jmh.version>1.21</jmh.version>
         <javac.target>1.8</javac.target>
         <uberjar.name>benchmarks</uberjar.name>
+        <skip.perf.benchmarks>true</skip.perf.benchmarks>
+        <benchmark.filter>.*</benchmark.filter>
+        <benchmark.forks>1</benchmark.forks>
+        <benchmark.warmups>5</benchmark.warmups>
+        <benchmark.runs>5</benchmark.runs>
     </properties>
 
     <build>
@@ -68,8 +108,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.1</version>
-                <configuration>
+                <configuration combine.self="override">
                     <compilerVersion>${javac.target}</compilerVersion>
                     <source>${javac.target}</source>
                     <target>${javac.target}</target>
@@ -105,6 +144,37 @@
                         </configuration>
                     </execution>
                 </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>1.6.0</version>
+                <executions>
+                    <execution>
+                        <id>run-java-benchmarks</id>
+                        <phase>integration-test</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <skip>${skip.perf.benchmarks}</skip>
+                    <classpathScope>test</classpathScope>
+                    <executable>java</executable>
+                    <arguments>
+                        <argument>-classpath</argument>
+                        <classpath />
+                        <argument>org.openjdk.jmh.Main</argument>
+                        <argument>${benchmark.filter}</argument>
+                        <argument>-f</argument>
+                        <argument>${benchmark.forks}</argument>
+                        <argument>-wi</argument>
+                        <argument>${benchmark.warmups}</argument>
+                        <argument>-i</argument>
+                        <argument>${benchmark.runs}</argument>
+                    </arguments>
+                </configuration>
             </plugin>
         </plugins>
         <pluginManagement>
@@ -143,11 +213,10 @@
                 </plugin>
                 <plugin>
                     <artifactId>maven-surefire-plugin</artifactId>
-                    <version>2.17</version>
+                    <version>3.0.0-M3</version>
                 </plugin>
             </plugins>
         </pluginManagement>
     </build>
 
 </project>
-

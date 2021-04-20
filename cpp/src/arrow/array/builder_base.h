@@ -19,26 +19,21 @@
 
 #include <algorithm>  // IWYU pragma: keep
 #include <cstdint>
-#include <cstring>
 #include <limits>
 #include <memory>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
-#include "arrow/buffer-builder.h"
+#include "arrow/array/array_base.h"
+#include "arrow/array/array_primitive.h"
+#include "arrow/buffer.h"
+#include "arrow/buffer_builder.h"
 #include "arrow/status.h"
-#include "arrow/type.h"
-#include "arrow/type_traits.h"
+#include "arrow/type_fwd.h"
 #include "arrow/util/macros.h"
-#include "arrow/util/type_traits.h"
 #include "arrow/util/visibility.h"
 
 namespace arrow {
-
-class Array;
-struct ArrayData;
-class MemoryPool;
 
 constexpr int64_t kMinBuilderCapacity = 1 << 5;
 constexpr int64_t kListMaximumElements = std::numeric_limits<int32_t>::max() - 1;
@@ -53,8 +48,7 @@ constexpr int64_t kListMaximumElements = std::numeric_limits<int32_t>::max() - 1
 /// For example, ArrayBuilder* pointing to BinaryBuilder should be downcast before use.
 class ARROW_EXPORT ArrayBuilder {
  public:
-  explicit ArrayBuilder(const std::shared_ptr<DataType>& type, MemoryPool* pool)
-      : type_(type), pool_(pool), null_bitmap_builder_(pool) {}
+  explicit ArrayBuilder(MemoryPool* pool) : pool_(pool), null_bitmap_builder_(pool) {}
 
   virtual ~ArrayBuilder() = default;
 
@@ -62,9 +56,11 @@ class ARROW_EXPORT ArrayBuilder {
   /// skip shared pointers and just return a raw pointer
   ArrayBuilder* child(int i) { return children_[i].get(); }
 
+  const std::shared_ptr<ArrayBuilder>& child_builder(int i) const { return children_[i]; }
+
   int num_children() const { return static_cast<int>(children_.size()); }
 
-  int64_t length() const { return length_; }
+  virtual int64_t length() const { return length_; }
   int64_t null_count() const { return null_count_; }
   int64_t capacity() const { return capacity_; }
 
@@ -79,9 +75,12 @@ class ARROW_EXPORT ArrayBuilder {
   /// \return Status
   virtual Status Resize(int64_t capacity);
 
-  /// \brief Ensure that there is enough space allocated to add the indicated
-  /// number of elements without any further calls to Resize. Overallocation is
+  /// \brief Ensure that there is enough space allocated to append the indicated
+  /// number of elements without any further reallocation. Overallocation is
   /// used in order to minimize the impact of incremental Reserve() calls.
+  /// Note that additional_capacity is relative to the current number of elements
+  /// rather than to the current capacity, so calls to Reserve() which are not
+  /// interspersed with addition of new elements may not increase the capacity.
   ///
   /// \param[in] additional_capacity the number of additional array values
   /// \return Status
@@ -98,8 +97,24 @@ class ARROW_EXPORT ArrayBuilder {
   /// Reset the builder.
   virtual void Reset();
 
+  /// \brief Append a null value to builder
   virtual Status AppendNull() = 0;
+  /// \brief Append a number of null values to builder
   virtual Status AppendNulls(int64_t length) = 0;
+
+  /// \brief Append a non-null value to builder
+  ///
+  /// The appended value is an implementation detail, but the corresponding
+  /// memory slot is guaranteed to be initialized.
+  /// This method is useful when appending a null value to a parent nested type.
+  virtual Status AppendEmptyValue() = 0;
+
+  /// \brief Append a number of non-null values to builder
+  ///
+  /// The appended values are an implementation detail, but the corresponding
+  /// memory slot is guaranteed to be initialized.
+  /// This method is useful when appending null values to a parent nested type.
+  virtual Status AppendEmptyValues(int64_t length) = 0;
 
   /// For cases where raw data was memcpy'd into the internal buffers, allows us
   /// to advance the length of the builder. It is your responsibility to use
@@ -121,7 +136,15 @@ class ARROW_EXPORT ArrayBuilder {
   /// \return Status
   Status Finish(std::shared_ptr<Array>* out);
 
-  std::shared_ptr<DataType> type() const { return type_; }
+  /// \brief Return result of builder as an Array object.
+  ///
+  /// The builder is reset except for DictionaryBuilder.
+  ///
+  /// \return The finalized Array object
+  Result<std::shared_ptr<Array>> Finish();
+
+  /// \brief Return the type of the built Array
+  virtual std::shared_ptr<DataType> type() const = 0;
 
  protected:
   /// Append to null bitmap
@@ -187,19 +210,27 @@ class ARROW_EXPORT ArrayBuilder {
     return Status::OK();
   }
 
-  static Status CheckCapacity(int64_t new_capacity, int64_t old_capacity) {
-    if (new_capacity < 0) {
-      return Status::Invalid("Resize capacity must be positive");
+  // Check the requested capacity for validity
+  Status CheckCapacity(int64_t new_capacity) {
+    if (ARROW_PREDICT_FALSE(new_capacity < 0)) {
+      return Status::Invalid(
+          "Resize capacity must be positive (requested: ", new_capacity, ")");
     }
 
-    if (new_capacity < old_capacity) {
-      return Status::Invalid("Resize cannot downsize");
+    if (ARROW_PREDICT_FALSE(new_capacity < length_)) {
+      return Status::Invalid("Resize cannot downsize (requested: ", new_capacity,
+                             ", current length: ", length_, ")");
     }
 
     return Status::OK();
   }
 
-  std::shared_ptr<DataType> type_;
+  // Check for array type
+  Status CheckArrayType(const std::shared_ptr<DataType>& expected_type,
+                        const Array& array, const char* message);
+  Status CheckArrayType(Type::type expected_type, const Array& array,
+                        const char* message);
+
   MemoryPool* pool_;
 
   TypedBufferBuilder<bool> null_bitmap_builder_;
@@ -215,5 +246,25 @@ class ARROW_EXPORT ArrayBuilder {
  private:
   ARROW_DISALLOW_COPY_AND_ASSIGN(ArrayBuilder);
 };
+
+/// \brief Construct an empty ArrayBuilder corresponding to the data
+/// type
+/// \param[in] pool the MemoryPool to use for allocations
+/// \param[in] type the data type to create the builder for
+/// \param[out] out the created ArrayBuilder
+ARROW_EXPORT
+Status MakeBuilder(MemoryPool* pool, const std::shared_ptr<DataType>& type,
+                   std::unique_ptr<ArrayBuilder>* out);
+
+/// \brief Construct an empty DictionaryBuilder initialized optionally
+/// with a pre-existing dictionary
+/// \param[in] pool the MemoryPool to use for allocations
+/// \param[in] type the dictionary type to create the builder for
+/// \param[in] dictionary the initial dictionary, if any. May be nullptr
+/// \param[out] out the created ArrayBuilder
+ARROW_EXPORT
+Status MakeDictionaryBuilder(MemoryPool* pool, const std::shared_ptr<DataType>& type,
+                             const std::shared_ptr<Array>& dictionary,
+                             std::unique_ptr<ArrayBuilder>* out);
 
 }  // namespace arrow

@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#ifndef GANDIVA_EPOCH_TIME_POINT_H
-#define GANDIVA_EPOCH_TIME_POINT_H
+#pragma once
 
 // TODO(wesm): IR compilation does not have any include directories set
 #include "../../arrow/vendored/datetime/date.h"
@@ -55,7 +54,7 @@ class EpochTimePoint {
   int TmMin() const { return static_cast<int>(TimeOfDay().minutes().count()); }
 
   int TmSec() const {
-    // TODO(wesm): UNIX y2k issue on int=int32 platforms
+    // TODO(wesm): UNIX y2k issue on int=gdv_int32 platforms
     return static_cast<int>(TimeOfDay().seconds().count());
   }
 
@@ -103,5 +102,3 @@ class EpochTimePoint {
 
   std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds> tp_;
 };
-
-#endif  // GANDIVA_EPOCH_TIME_POINT_H

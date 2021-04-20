@@ -22,7 +22,6 @@ import { Builder } from '../../Arrow';
 import { DataType, Vector, Chunked } from '../../Arrow';
 
 const rand = Math.random.bind(Math);
-/* tslint:disable */
 const randstr = require('randomatic');
 const randnulls = <T, TNull = null>(values: T[], n: TNull = <any> null) => values.map((x) => Math.random() > 0.25 ? x : n) as (T | TNull)[];
 
@@ -59,7 +58,7 @@ export const int64sNoNulls = (length = 20) => Array.from({ length }, (_, i) => {
         // Int32Array (util.BN is-a Int32Array)
         case 0: return bn;
         // BigInt
-        case 1: return bn[Symbol.toPrimitive]()
+        case 1: return bn[Symbol.toPrimitive]();
         // number
         case 2:
         default: return bn[0];
@@ -77,13 +76,13 @@ export const uint64sNoNulls = (length = 20) => Array.from({ length }, (_, i) => 
         // UInt32Array (util.BN is-a Uint32Array)
         case 0: return bn;
         // BigInt
-        case 1: return bn[Symbol.toPrimitive]()
+        case 1: return bn[Symbol.toPrimitive]();
         // number
         case 2:
         default: return bn[0];
     }
 });
-export const float16sNoNulls = (length = 20) => Array.from(new Uint16Array(randomBytes(length * Uint16Array.BYTES_PER_ELEMENT).buffer)).map((x) => (x - 32767) / 32767);
+export const float16sNoNulls = (length = 20) => Array.from(new Uint16Array(randomBytes(length * Uint16Array.BYTES_PER_ELEMENT).buffer)).map(util.uint16ToFloat64);
 export const float32sNoNulls = (length = 20) => Array.from(new Float32Array(randomBytes(length * Float32Array.BYTES_PER_ELEMENT).buffer));
 export const float64sNoNulls = (length = 20) => Array.from(new Float64Array(randomBytes(length * Float64Array.BYTES_PER_ELEMENT).buffer));
 
@@ -181,9 +180,9 @@ export function validateVector<T extends DataType>(vals: (T['TValue'] | null)[],
     try {
         for (x of vec) {
             if (nulls.has(y = vals[i])) {
-                expect(x).toEqual(null);
+                expect(x).toBeNull();
             } else if (isInt64Null(nulls, y)) {
-                expect(x).toEqual(null);
+                expect(x).toBeNull();
             } else {
                 expect(x).toArrowCompare(y);
             }

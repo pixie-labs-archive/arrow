@@ -19,6 +19,7 @@ package org.apache.arrow.vector;
 
 import static org.apache.arrow.vector.NullCheckingForGet.NULL_CHECKING_ENABLED;
 
+import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.complex.impl.SmallIntReaderImpl;
 import org.apache.arrow.vector.complex.reader.FieldReader;
@@ -29,14 +30,12 @@ import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.FieldType;
 import org.apache.arrow.vector.util.TransferPair;
 
-import io.netty.buffer.ArrowBuf;
-
 /**
  * SmallIntVector implements a fixed width (2 bytes) vector of
  * short values which could be null. A validity buffer (bit vector) is
  * maintained to track which elements in the vector are null.
  */
-public class SmallIntVector extends BaseFixedWidthVector implements BaseIntVector {
+public final class SmallIntVector extends BaseFixedWidthVector implements BaseIntVector {
   public static final byte TYPE_WIDTH = 2;
   private final FieldReader reader;
 
@@ -114,7 +113,7 @@ public class SmallIntVector extends BaseFixedWidthVector implements BaseIntVecto
     if (NULL_CHECKING_ENABLED && isSet(index) == 0) {
       throw new IllegalStateException("Value at index is null");
     }
-    return valueBuffer.getShort(index * TYPE_WIDTH);
+    return valueBuffer.getShort((long) index * TYPE_WIDTH);
   }
 
   /**
@@ -130,7 +129,7 @@ public class SmallIntVector extends BaseFixedWidthVector implements BaseIntVecto
       return;
     }
     holder.isSet = 1;
-    holder.value = valueBuffer.getShort(index * TYPE_WIDTH);
+    holder.value = valueBuffer.getShort((long) index * TYPE_WIDTH);
   }
 
   /**
@@ -143,7 +142,7 @@ public class SmallIntVector extends BaseFixedWidthVector implements BaseIntVecto
     if (isSet(index) == 0) {
       return null;
     } else {
-      return valueBuffer.getShort(index * TYPE_WIDTH);
+      return valueBuffer.getShort((long) index * TYPE_WIDTH);
     }
   }
 
@@ -155,11 +154,11 @@ public class SmallIntVector extends BaseFixedWidthVector implements BaseIntVecto
 
 
   private void setValue(int index, int value) {
-    valueBuffer.setShort(index * TYPE_WIDTH, value);
+    valueBuffer.setShort((long) index * TYPE_WIDTH, value);
   }
 
   private void setValue(int index, short value) {
-    valueBuffer.setShort(index * TYPE_WIDTH, value);
+    valueBuffer.setShort((long) index * TYPE_WIDTH, value);
   }
 
   /**
@@ -169,7 +168,7 @@ public class SmallIntVector extends BaseFixedWidthVector implements BaseIntVecto
    * @param value   value of element
    */
   public void set(int index, int value) {
-    BitVectorHelper.setValidityBitToOne(validityBuffer, index);
+    BitVectorHelper.setBit(validityBuffer, index);
     setValue(index, value);
   }
 
@@ -180,7 +179,7 @@ public class SmallIntVector extends BaseFixedWidthVector implements BaseIntVecto
    * @param value   value of element
    */
   public void set(int index, short value) {
-    BitVectorHelper.setValidityBitToOne(validityBuffer, index);
+    BitVectorHelper.setBit(validityBuffer, index);
     setValue(index, value);
   }
 
@@ -196,10 +195,10 @@ public class SmallIntVector extends BaseFixedWidthVector implements BaseIntVecto
     if (holder.isSet < 0) {
       throw new IllegalArgumentException();
     } else if (holder.isSet > 0) {
-      BitVectorHelper.setValidityBitToOne(validityBuffer, index);
+      BitVectorHelper.setBit(validityBuffer, index);
       setValue(index, holder.value);
     } else {
-      BitVectorHelper.setValidityBit(validityBuffer, index, 0);
+      BitVectorHelper.unsetBit(validityBuffer, index);
     }
   }
 
@@ -210,7 +209,7 @@ public class SmallIntVector extends BaseFixedWidthVector implements BaseIntVecto
    * @param holder  data holder for value of element
    */
   public void set(int index, SmallIntHolder holder) {
-    BitVectorHelper.setValidityBitToOne(validityBuffer, index);
+    BitVectorHelper.setBit(validityBuffer, index);
     setValue(index, holder.value);
   }
 
@@ -267,18 +266,6 @@ public class SmallIntVector extends BaseFixedWidthVector implements BaseIntVecto
   }
 
   /**
-   * Set the element at the given index to null.
-   *
-   * @param index   position of element
-   */
-  public void setNull(int index) {
-    handleSafe(index);
-    // not really needed to set the bit to 0 as long as
-    // the buffer always starts from 0.
-    BitVectorHelper.setValidityBit(validityBuffer, index, 0);
-  }
-
-  /**
    * Store the given value at a particular position in the vector. isSet indicates
    * whether the value is NULL or not.
    *
@@ -290,7 +277,7 @@ public class SmallIntVector extends BaseFixedWidthVector implements BaseIntVecto
     if (isSet > 0) {
       set(index, value);
     } else {
-      BitVectorHelper.setValidityBit(validityBuffer, index, 0);
+      BitVectorHelper.unsetBit(validityBuffer, index);
     }
   }
 
@@ -319,7 +306,7 @@ public class SmallIntVector extends BaseFixedWidthVector implements BaseIntVecto
    * @return value stored at the index.
    */
   public static short get(final ArrowBuf buffer, final int index) {
-    return buffer.getShort(index * TYPE_WIDTH);
+    return buffer.getShort((long) index * TYPE_WIDTH);
   }
 
 
@@ -330,7 +317,7 @@ public class SmallIntVector extends BaseFixedWidthVector implements BaseIntVecto
    *----------------------------------------------------------------*/
 
   /**
-   * Construct a TransferPair comprising of this and and a target vector of
+   * Construct a TransferPair comprising of this and a target vector of
    * the same type.
    *
    * @param ref name of the target vector

@@ -17,9 +17,11 @@ using System;
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using Apache.Arrow.Types;
 using FlatBuffers;
 
 namespace Apache.Arrow.Ipc
@@ -43,7 +45,10 @@ namespace Apache.Arrow.Ipc
             IArrowArrayVisitor<Date64Array>,
             IArrowArrayVisitor<ListArray>,
             IArrowArrayVisitor<StringArray>,
-            IArrowArrayVisitor<BinaryArray>
+            IArrowArrayVisitor<BinaryArray>,
+            IArrowArrayVisitor<StructArray>,
+            IArrowArrayVisitor<Decimal128Array>,
+            IArrowArrayVisitor<Decimal256Array>
         {
             public readonly struct Buffer
             {
@@ -81,12 +86,8 @@ namespace Apache.Arrow.Ipc
             public void Visit(DoubleArray array) => CreateBuffers(array);
             public void Visit(TimestampArray array) => CreateBuffers(array);
             public void Visit(BooleanArray array) => CreateBuffers(array);
-            public void Visit(Date32Array array)
-            {
-                _buffers.Add(CreateBuffer(array.NullBitmapBuffer));
-                _buffers.Add(CreateBuffer(array.ValueBuffer));
-            }
-            public void Visit(Date64Array array) => throw new NotSupportedException();
+            public void Visit(Date32Array array) => CreateBuffers(array);
+            public void Visit(Date64Array array) => CreateBuffers(array);
 
             public void Visit(ListArray array)
             {
@@ -105,6 +106,28 @@ namespace Apache.Arrow.Ipc
                 _buffers.Add(CreateBuffer(array.ValueBuffer));
             }
 
+            public void Visit(Decimal128Array array)
+            {
+                _buffers.Add(CreateBuffer(array.NullBitmapBuffer));
+                _buffers.Add(CreateBuffer(array.ValueBuffer));
+            }
+
+            public void Visit(Decimal256Array array)
+            {
+                _buffers.Add(CreateBuffer(array.NullBitmapBuffer));
+                _buffers.Add(CreateBuffer(array.ValueBuffer));
+            }
+
+            public void Visit(StructArray array)
+            {
+                _buffers.Add(CreateBuffer(array.NullBitmapBuffer));
+
+                for (int i = 0; i < array.Fields.Count; i++)
+                {
+                    array.Fields[i].Accept(this);
+                }
+            }
+
             private void CreateBuffers(BooleanArray array)
             {
                 _buffers.Add(CreateBuffer(array.NullBitmapBuffer));
@@ -112,7 +135,7 @@ namespace Apache.Arrow.Ipc
             }
 
             private void CreateBuffers<T>(PrimitiveArray<T> array)
-                where T: struct
+                where T : struct
             {
                 _buffers.Add(CreateBuffer(array.NullBitmapBuffer));
                 _buffers.Add(CreateBuffer(array.ValueBuffer));
@@ -120,7 +143,7 @@ namespace Apache.Arrow.Ipc
 
             private Buffer CreateBuffer(ArrowBuffer buffer)
             {
-                var offset = TotalLength;
+                int offset = TotalLength;
 
                 int paddedLength = checked((int)BitUtility.RoundUpToMultipleOf8(buffer.Length));
                 TotalLength += paddedLength;
@@ -142,21 +165,30 @@ namespace Apache.Arrow.Ipc
 
         protected bool HasWrittenSchema { get; set; }
 
+        private bool HasWrittenEnd { get; set; }
+
         protected Schema Schema { get; }
 
         private readonly bool _leaveOpen;
+        private readonly IpcOptions _options;
 
         private protected const Flatbuf.MetadataVersion CurrentMetadataVersion = Flatbuf.MetadataVersion.V4;
 
-        private static readonly byte[] Padding = new byte[64];
+        private static readonly byte[] s_padding = new byte[64];
 
         private readonly ArrowTypeFlatbufferBuilder _fieldTypeBuilder;
 
-        public ArrowStreamWriter(Stream baseStream, Schema schema) : this(baseStream, schema, leaveOpen: false)
+        public ArrowStreamWriter(Stream baseStream, Schema schema)
+            : this(baseStream, schema, leaveOpen: false)
         {
         }
 
         public ArrowStreamWriter(Stream baseStream, Schema schema, bool leaveOpen)
+            : this(baseStream, schema, leaveOpen, options: null)
+        {
+        }
+
+        public ArrowStreamWriter(Stream baseStream, Schema schema, bool leaveOpen, IpcOptions options)
         {
             BaseStream = baseStream ?? throw new ArgumentNullException(nameof(baseStream));
             Schema = schema ?? throw new ArgumentNullException(nameof(schema));
@@ -167,6 +199,102 @@ namespace Apache.Arrow.Ipc
             HasWrittenSchema = false;
 
             _fieldTypeBuilder = new ArrowTypeFlatbufferBuilder(Builder);
+            _options = options ?? IpcOptions.Default;
+        }
+
+
+        private void CreateSelfAndChildrenFieldNodes(ArrayData data)
+        {
+            if (data.DataType is NestedType)
+            {
+                // flatbuffer struct vectors have to be created in reverse order
+                for (int i = data.Children.Length - 1; i >= 0; i--)
+                {
+                    CreateSelfAndChildrenFieldNodes(data.Children[i]);
+                }
+            }
+            Flatbuf.FieldNode.CreateFieldNode(Builder, data.Length, data.NullCount);
+        }
+
+        private int CountAllNodes()
+        {
+            int count = 0;
+            foreach (Field arrowArray in Schema.Fields.Values)
+            {
+                CountSelfAndChildrenNodes(arrowArray.DataType, ref count);
+            }
+            return count;
+        }
+
+        private void CountSelfAndChildrenNodes(IArrowType type, ref int count)
+        {
+            if (type is NestedType nestedType)
+            {
+                foreach (Field childField in nestedType.Fields)
+                {
+                    CountSelfAndChildrenNodes(childField.DataType, ref count);
+                }
+            }
+            count++;
+        }
+
+        private protected void WriteRecordBatchInternal(RecordBatch recordBatch)
+        {
+            // TODO: Truncate buffers with extraneous padding / unused capacity
+
+            if (!HasWrittenSchema)
+            {
+                WriteSchema(Schema);
+                HasWrittenSchema = true;
+            }
+
+            (ArrowRecordBatchFlatBufferBuilder recordBatchBuilder, VectorOffset fieldNodesVectorOffset) =
+                PreparingWritingRecordBatch(recordBatch);
+
+            VectorOffset buffersVectorOffset = Builder.EndVector();
+
+            // Serialize record batch
+
+            StartingWritingRecordBatch();
+
+            Offset<Flatbuf.RecordBatch> recordBatchOffset = Flatbuf.RecordBatch.CreateRecordBatch(Builder, recordBatch.Length,
+                fieldNodesVectorOffset,
+                buffersVectorOffset);
+
+            long metadataLength = WriteMessage(Flatbuf.MessageHeader.RecordBatch,
+                recordBatchOffset, recordBatchBuilder.TotalLength);
+
+            // Write buffer data
+
+            IReadOnlyList<ArrowRecordBatchFlatBufferBuilder.Buffer> buffers = recordBatchBuilder.Buffers;
+
+            long bodyLength = 0;
+
+            for (int i = 0; i < buffers.Count; i++)
+            {
+                ArrowBuffer buffer = buffers[i].DataBuffer;
+                if (buffer.IsEmpty)
+                    continue;
+
+                WriteBuffer(buffer);
+
+                int paddedLength = checked((int)BitUtility.RoundUpToMultipleOf8(buffer.Length));
+                int padding = paddedLength - buffer.Length;
+                if (padding > 0)
+                {
+                    WritePadding(padding);
+                }
+
+                bodyLength += paddedLength;
+            }
+
+            // Write padding so the record batch message body length is a multiple of 8 bytes
+
+            int bodyPaddingLength = CalculatePadding(bodyLength);
+
+            WritePadding(bodyPaddingLength);
+
+            FinishedWritingRecordBatch(bodyLength + bodyPaddingLength, metadataLength);
         }
 
         private protected async Task WriteRecordBatchInternalAsync(RecordBatch recordBatch,
@@ -180,50 +308,16 @@ namespace Apache.Arrow.Ipc
                 HasWrittenSchema = true;
             }
 
-            Builder.Clear();
+            (ArrowRecordBatchFlatBufferBuilder recordBatchBuilder, VectorOffset fieldNodesVectorOffset) =
+                PreparingWritingRecordBatch(recordBatch);
 
-            // Serialize field nodes
-
-            var fieldCount = Schema.Fields.Count;
-
-            Flatbuf.RecordBatch.StartNodesVector(Builder, fieldCount);
-
-            // flatbuffer struct vectors have to be created in reverse order
-            for (var i = fieldCount - 1; i >= 0; i--)
-            {
-                var fieldArray = recordBatch.Column(i);
-                Flatbuf.FieldNode.CreateFieldNode(Builder, fieldArray.Length, fieldArray.NullCount);
-            }
-
-            var fieldNodesVectorOffset = Builder.EndVector();
-
-            // Serialize buffers
-
-            var recordBatchBuilder = new ArrowRecordBatchFlatBufferBuilder();
-            for (var i = 0; i < fieldCount; i++)
-            {
-                var fieldArray = recordBatch.Column(i);
-                fieldArray.Accept(recordBatchBuilder);
-            }
-
-            var buffers = recordBatchBuilder.Buffers;
-
-            Flatbuf.RecordBatch.StartBuffersVector(Builder, buffers.Count);
-
-            // flatbuffer struct vectors have to be created in reverse order
-            for (var i = buffers.Count - 1; i >= 0; i--)
-            {
-                Flatbuf.Buffer.CreateBuffer(Builder,
-                    buffers[i].Offset, buffers[i].DataBuffer.Length);
-            }
-
-            var buffersVectorOffset = Builder.EndVector();
+            VectorOffset buffersVectorOffset = Builder.EndVector();
 
             // Serialize record batch
 
             StartingWritingRecordBatch();
 
-            var recordBatchOffset = Flatbuf.RecordBatch.CreateRecordBatch(Builder, recordBatch.Length,
+            Offset<Flatbuf.RecordBatch> recordBatchOffset = Flatbuf.RecordBatch.CreateRecordBatch(Builder, recordBatch.Length,
                 fieldNodesVectorOffset,
                 buffersVectorOffset);
 
@@ -233,9 +327,11 @@ namespace Apache.Arrow.Ipc
 
             // Write buffer data
 
+            IReadOnlyList<ArrowRecordBatchFlatBufferBuilder.Buffer> buffers = recordBatchBuilder.Buffers;
+
             long bodyLength = 0;
 
-            for (var i = 0; i < buffers.Count; i++)
+            for (int i = 0; i < buffers.Count; i++)
             {
                 ArrowBuffer buffer = buffers[i].DataBuffer;
                 if (buffer.IsEmpty)
@@ -262,6 +358,57 @@ namespace Apache.Arrow.Ipc
             FinishedWritingRecordBatch(bodyLength + bodyPaddingLength, metadataLength);
         }
 
+        private Tuple<ArrowRecordBatchFlatBufferBuilder, VectorOffset> PreparingWritingRecordBatch(RecordBatch recordBatch)
+        {
+            Builder.Clear();
+
+            // Serialize field nodes
+
+            int fieldCount = Schema.Fields.Count;
+
+            Flatbuf.RecordBatch.StartNodesVector(Builder, CountAllNodes());
+
+            // flatbuffer struct vectors have to be created in reverse order
+            for (int i = fieldCount - 1; i >= 0; i--)
+            {
+                CreateSelfAndChildrenFieldNodes(recordBatch.Column(i).Data);
+            }
+
+            VectorOffset fieldNodesVectorOffset = Builder.EndVector();
+
+            // Serialize buffers
+
+            var recordBatchBuilder = new ArrowRecordBatchFlatBufferBuilder();
+            for (int i = 0; i < fieldCount; i++)
+            {
+                IArrowArray fieldArray = recordBatch.Column(i);
+                fieldArray.Accept(recordBatchBuilder);
+            }
+
+            IReadOnlyList<ArrowRecordBatchFlatBufferBuilder.Buffer> buffers = recordBatchBuilder.Buffers;
+
+            Flatbuf.RecordBatch.StartBuffersVector(Builder, buffers.Count);
+
+            // flatbuffer struct vectors have to be created in reverse order
+            for (int i = buffers.Count - 1; i >= 0; i--)
+            {
+                Flatbuf.Buffer.CreateBuffer(Builder,
+                    buffers[i].Offset, buffers[i].DataBuffer.Length);
+            }
+
+            return Tuple.Create(recordBatchBuilder, fieldNodesVectorOffset);
+        }
+
+        private protected virtual void WriteEndInternal()
+        {
+            WriteIpcMessageLength(length: 0);
+        }
+
+        private protected virtual ValueTask WriteEndInternalAsync(CancellationToken cancellationToken)
+        {
+            return WriteIpcMessageLengthAsync(length: 0, cancellationToken);
+        }
+
         private protected virtual void StartingWritingRecordBatch()
         {
         }
@@ -270,9 +417,37 @@ namespace Apache.Arrow.Ipc
         {
         }
 
+        public virtual void WriteRecordBatch(RecordBatch recordBatch)
+        {
+            WriteRecordBatchInternal(recordBatch);
+        }
+
         public virtual Task WriteRecordBatchAsync(RecordBatch recordBatch, CancellationToken cancellationToken = default)
         {
             return WriteRecordBatchInternalAsync(recordBatch, cancellationToken);
+        }
+
+        public void WriteEnd()
+        {
+            if (!HasWrittenEnd)
+            {
+                WriteEndInternal();
+                HasWrittenEnd = true;
+            }
+        }
+
+        public async Task WriteEndAsync(CancellationToken cancellationToken = default)
+        {
+            if (!HasWrittenEnd)
+            {
+                await WriteEndInternalAsync(cancellationToken);
+                HasWrittenEnd = true;
+            }
+        }
+
+        private void WriteBuffer(ArrowBuffer arrowBuffer)
+        {
+            BaseStream.Write(arrowBuffer.Memory);
         }
 
         private ValueTask WriteBufferAsync(ArrowBuffer arrowBuffer, CancellationToken cancellationToken = default)
@@ -282,34 +457,109 @@ namespace Apache.Arrow.Ipc
 
         private protected Offset<Flatbuf.Schema> SerializeSchema(Schema schema)
         {
-            // TODO: Serialize schema metadata
+            // Build metadata
+            VectorOffset metadataVectorOffset = default;
+            if (schema.HasMetadata)
+            {
+                Offset<Flatbuf.KeyValue>[] metadataOffsets = GetMetadataOffsets(schema.Metadata);
+                metadataVectorOffset = Flatbuf.Schema.CreateCustomMetadataVector(Builder, metadataOffsets);
+            }
 
             // Build fields
-
             var fieldOffsets = new Offset<Flatbuf.Field>[schema.Fields.Count];
-            var fieldChildren = new List<Offset<Flatbuf.Field>>();
-
-            for (var i = 0; i < fieldOffsets.Length; i++)
+            for (int i = 0; i < fieldOffsets.Length; i++)
             {
-                var field = schema.GetFieldByIndex(i);
-                var fieldNameOffset = Builder.CreateString(field.Name);
-                var fieldType = _fieldTypeBuilder.BuildFieldType(field);
+                Field field = schema.GetFieldByIndex(i);
+                StringOffset fieldNameOffset = Builder.CreateString(field.Name);
+                ArrowTypeFlatbufferBuilder.FieldType fieldType = _fieldTypeBuilder.BuildFieldType(field);
 
-                var fieldChildrenOffsets = Builder.CreateVectorOfTables(fieldChildren.ToArray());
+                VectorOffset fieldChildrenVectorOffset = GetChildrenFieldOffset(field);
+                VectorOffset fieldMetadataVectorOffset = GetFieldMetadataOffset(field);
 
                 fieldOffsets[i] = Flatbuf.Field.CreateField(Builder,
                     fieldNameOffset, field.IsNullable, fieldType.Type, fieldType.Offset,
-                    default, fieldChildrenOffsets, default);
+                    default, fieldChildrenVectorOffset, fieldMetadataVectorOffset);
             }
 
-            var fieldsVectorOffset = Flatbuf.Schema.CreateFieldsVector(Builder, fieldOffsets);
+            VectorOffset fieldsVectorOffset = Flatbuf.Schema.CreateFieldsVector(Builder, fieldOffsets);
 
             // Build schema
 
-            var endianness = BitConverter.IsLittleEndian ? Flatbuf.Endianness.Little : Flatbuf.Endianness.Big;
+            Flatbuf.Endianness endianness = BitConverter.IsLittleEndian ? Flatbuf.Endianness.Little : Flatbuf.Endianness.Big;
 
             return Flatbuf.Schema.CreateSchema(
-                Builder, endianness, fieldsVectorOffset);
+                Builder, endianness, fieldsVectorOffset, metadataVectorOffset);
+        }
+
+        private VectorOffset GetChildrenFieldOffset(Field field)
+        {
+            if (!(field.DataType is NestedType type))
+            {
+                return default;
+            }
+
+            int childrenCount = type.Fields.Count;
+            var children = new Offset<Flatbuf.Field>[childrenCount];
+
+            for (int i = 0; i < childrenCount; i++)
+            {
+                Field childField = type.Fields[i];
+                StringOffset childFieldNameOffset = Builder.CreateString(childField.Name);
+                ArrowTypeFlatbufferBuilder.FieldType childFieldType = _fieldTypeBuilder.BuildFieldType(childField);
+
+                VectorOffset childFieldChildrenVectorOffset = GetChildrenFieldOffset(childField);
+                VectorOffset childFieldMetadataVectorOffset = GetFieldMetadataOffset(childField);
+
+                children[i] = Flatbuf.Field.CreateField(Builder,
+                    childFieldNameOffset, childField.IsNullable, childFieldType.Type, childFieldType.Offset,
+                    default, childFieldChildrenVectorOffset, childFieldMetadataVectorOffset);
+            }
+
+            return Builder.CreateVectorOfTables(children);
+        }
+
+        private VectorOffset GetFieldMetadataOffset(Field field)
+        {
+            if (!field.HasMetadata)
+            {
+                return default;
+            }
+
+            Offset<Flatbuf.KeyValue>[] metadataOffsets = GetMetadataOffsets(field.Metadata);
+            return Flatbuf.Field.CreateCustomMetadataVector(Builder, metadataOffsets);
+        }
+
+        private Offset<Flatbuf.KeyValue>[] GetMetadataOffsets(IReadOnlyDictionary<string, string> metadata)
+        {
+            Debug.Assert(metadata != null);
+            Debug.Assert(metadata.Count > 0);
+
+            Offset<Flatbuf.KeyValue>[] metadataOffsets = new Offset<Flatbuf.KeyValue>[metadata.Count];
+            int index = 0;
+            foreach (KeyValuePair<string, string> metadatum in metadata)
+            {
+                StringOffset keyOffset = Builder.CreateString(metadatum.Key);
+                StringOffset valueOffset = Builder.CreateString(metadatum.Value);
+
+                metadataOffsets[index++] = Flatbuf.KeyValue.CreateKeyValue(Builder, keyOffset, valueOffset);
+            }
+
+            return metadataOffsets;
+        }
+
+        private Offset<Flatbuf.Schema> WriteSchema(Schema schema)
+        {
+            Builder.Clear();
+
+            // Build schema
+
+            Offset<Flatbuf.Schema> schemaOffset = SerializeSchema(schema);
+
+            // Build message
+
+            WriteMessage(Flatbuf.MessageHeader.Schema, schemaOffset, 0);
+
+            return schemaOffset;
         }
 
         private async ValueTask<Offset<Flatbuf.Schema>> WriteSchemaAsync(Schema schema, CancellationToken cancellationToken)
@@ -318,7 +568,7 @@ namespace Apache.Arrow.Ipc
 
             // Build schema
 
-            var schemaOffset = SerializeSchema(schema);
+            Offset<Flatbuf.Schema> schemaOffset = SerializeSchema(schema);
 
             // Build message
 
@@ -334,41 +584,108 @@ namespace Apache.Arrow.Ipc
         /// <returns>
         /// The number of bytes written to the stream.
         /// </returns>
-        private async ValueTask<long> WriteMessageAsync<T>(
-            Flatbuf.MessageHeader headerType, Offset<T> headerOffset, int bodyLength,
-            CancellationToken cancellationToken)
-            where T: struct
+        private protected long WriteMessage<T>(
+            Flatbuf.MessageHeader headerType, Offset<T> headerOffset, int bodyLength)
+            where T : struct
         {
-            var messageOffset = Flatbuf.Message.CreateMessage(
+            Offset<Flatbuf.Message> messageOffset = Flatbuf.Message.CreateMessage(
                 Builder, CurrentMetadataVersion, headerType, headerOffset.Value,
                 bodyLength);
 
             Builder.Finish(messageOffset.Value);
 
-            var messageData = Builder.DataBuffer.ToReadOnlyMemory(Builder.DataBuffer.Position, Builder.Offset);
-            var messagePaddingLength = CalculatePadding(messageData.Length);
+            ReadOnlyMemory<byte> messageData = Builder.DataBuffer.ToReadOnlyMemory(Builder.DataBuffer.Position, Builder.Offset);
+            int messagePaddingLength = CalculatePadding(_options.SizeOfIpcLength + messageData.Length);
 
-            await Buffers.RentReturnAsync(4, async (buffer) =>
+            WriteIpcMessageLength(messageData.Length + messagePaddingLength);
+
+            BaseStream.Write(messageData);
+            WritePadding(messagePaddingLength);
+
+            checked
             {
-                var metadataSize = messageData.Length + messagePaddingLength;
-                BinaryPrimitives.WriteInt32LittleEndian(buffer.Span, metadataSize);
-                await BaseStream.WriteAsync(buffer, cancellationToken).ConfigureAwait(false);
-            }).ConfigureAwait(false);
+                return _options.SizeOfIpcLength + messageData.Length + messagePaddingLength;
+            }
+        }
+
+        /// <summary>
+        /// Writes the message to the <see cref="BaseStream"/>.
+        /// </summary>
+        /// <returns>
+        /// The number of bytes written to the stream.
+        /// </returns>
+        private protected virtual async ValueTask<long> WriteMessageAsync<T>(
+            Flatbuf.MessageHeader headerType, Offset<T> headerOffset, int bodyLength,
+            CancellationToken cancellationToken)
+            where T : struct
+        {
+            Offset<Flatbuf.Message> messageOffset = Flatbuf.Message.CreateMessage(
+                Builder, CurrentMetadataVersion, headerType, headerOffset.Value,
+                bodyLength);
+
+            Builder.Finish(messageOffset.Value);
+
+            ReadOnlyMemory<byte> messageData = Builder.DataBuffer.ToReadOnlyMemory(Builder.DataBuffer.Position, Builder.Offset);
+            int messagePaddingLength = CalculatePadding(_options.SizeOfIpcLength + messageData.Length);
+
+            await WriteIpcMessageLengthAsync(messageData.Length + messagePaddingLength, cancellationToken)
+                .ConfigureAwait(false);
 
             await BaseStream.WriteAsync(messageData, cancellationToken).ConfigureAwait(false);
             await WritePaddingAsync(messagePaddingLength).ConfigureAwait(false);
 
             checked
             {
-                return 4 + messageData.Length + messagePaddingLength;
+                return _options.SizeOfIpcLength + messageData.Length + messagePaddingLength;
             }
+        }
+
+        private protected void WriteFlatBuffer()
+        {
+            ReadOnlyMemory<byte> segment = Builder.DataBuffer.ToReadOnlyMemory(Builder.DataBuffer.Position, Builder.Offset);
+
+            BaseStream.Write(segment);
         }
 
         private protected async ValueTask WriteFlatBufferAsync(CancellationToken cancellationToken = default)
         {
-            var segment = Builder.DataBuffer.ToReadOnlyMemory(Builder.DataBuffer.Position, Builder.Offset);
+            ReadOnlyMemory<byte> segment = Builder.DataBuffer.ToReadOnlyMemory(Builder.DataBuffer.Position, Builder.Offset);
 
             await BaseStream.WriteAsync(segment, cancellationToken).ConfigureAwait(false);
+        }
+
+        private void WriteIpcMessageLength(int length)
+        {
+            Buffers.RentReturn(_options.SizeOfIpcLength, (buffer) =>
+            {
+                Memory<byte> currentBufferPosition = buffer;
+                if (!_options.WriteLegacyIpcFormat)
+                {
+                    BinaryPrimitives.WriteInt32LittleEndian(
+                        currentBufferPosition.Span, MessageSerializer.IpcContinuationToken);
+                    currentBufferPosition = currentBufferPosition.Slice(sizeof(int));
+                }
+
+                BinaryPrimitives.WriteInt32LittleEndian(currentBufferPosition.Span, length);
+                BaseStream.Write(buffer);
+            });
+        }
+
+        private async ValueTask WriteIpcMessageLengthAsync(int length, CancellationToken cancellationToken)
+        {
+            await Buffers.RentReturnAsync(_options.SizeOfIpcLength, async (buffer) =>
+            {
+                Memory<byte> currentBufferPosition = buffer;
+                if (!_options.WriteLegacyIpcFormat)
+                {
+                    BinaryPrimitives.WriteInt32LittleEndian(
+                        currentBufferPosition.Span, MessageSerializer.IpcContinuationToken);
+                    currentBufferPosition = currentBufferPosition.Slice(sizeof(int));
+                }
+
+                BinaryPrimitives.WriteInt32LittleEndian(currentBufferPosition.Span, length);
+                await BaseStream.WriteAsync(buffer, cancellationToken).ConfigureAwait(false);
+            }).ConfigureAwait(false);
         }
 
         protected int CalculatePadding(long offset, int alignment = 8)
@@ -380,11 +697,19 @@ namespace Apache.Arrow.Ipc
             }
         }
 
+        private protected void WritePadding(int length)
+        {
+            if (length > 0)
+            {
+                BaseStream.Write(s_padding.AsMemory(0, Math.Min(s_padding.Length, length)));
+            }
+        }
+
         private protected ValueTask WritePaddingAsync(int length)
         {
             if (length > 0)
             {
-                return BaseStream.WriteAsync(Padding.AsMemory(0, Math.Min(Padding.Length, length)));
+                return BaseStream.WriteAsync(s_padding.AsMemory(0, Math.Min(s_padding.Length, length)));
             }
 
             return default;

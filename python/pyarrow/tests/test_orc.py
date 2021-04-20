@@ -21,21 +21,22 @@ import datetime
 
 import pyarrow as pa
 
+
 # Marks all of the tests in this module
 # Ignore these with pytest ... -m 'not orc'
 pytestmark = pytest.mark.orc
 
 
 try:
-    from pandas.util.testing import assert_frame_equal
+    from pandas.testing import assert_frame_equal
     import pandas as pd
 except ImportError:
     pass
 
 
-@pytest.fixture(scope='module')
-def datadir(datadir):
-    return datadir / 'orc'
+@pytest.fixture(scope="module")
+def datadir(base_datadir):
+    return base_datadir / "orc"
 
 
 def fix_example_values(actual_cols, expected_cols):
@@ -46,16 +47,19 @@ def fix_example_values(actual_cols, expected_cols):
     for name in expected_cols:
         expected = expected_cols[name]
         actual = actual_cols[name]
+        if (name == "map" and
+                [d.keys() == {'key', 'value'} for m in expected for d in m]):
+            # convert [{'key': k, 'value': v}, ...] to [(k, v), ...]
+            for i, m in enumerate(expected):
+                expected_cols[name][i] = [(d['key'], d['value']) for d in m]
+            continue
+
         typ = actual[0].__class__
-        if typ is bytes:
-            # bytes fields are represented as lists of ints in JSON files
-            # (Python 2: need to use bytearray, not bytes)
-            expected = [bytearray(v) for v in expected]
-        elif issubclass(typ, datetime.datetime):
+        if issubclass(typ, datetime.datetime):
             # timestamp fields are represented as strings in JSON files
             expected = pd.to_datetime(expected)
         elif issubclass(typ, datetime.date):
-            # # date fields are represented as strings in JSON files
+            # date fields are represented as strings in JSON files
             expected = expected.dt.date
         elif typ is decimal.Decimal:
             converted_decimals = [None] * len(expected)
@@ -87,7 +91,7 @@ def check_example_file(orc_path, expected_df, need_fix=False):
     # Exercise ORCFile.read()
     table = orc_file.read()
     assert isinstance(table, pa.Table)
-    table._validate()
+    table.validate()
 
     # This workaround needed because of ARROW-3080
     orc_df = pd.DataFrame(table.to_pydict())
@@ -135,35 +139,44 @@ def test_example_using_json(filename, datadir):
 def test_orcfile_empty(datadir):
     from pyarrow import orc
 
-    table = orc.ORCFile(datadir / 'TestOrcFile.emptyFile.orc').read()
+    table = orc.ORCFile(datadir / "TestOrcFile.emptyFile.orc").read()
     assert table.num_rows == 0
 
     expected_schema = pa.schema([
-        ('boolean1', pa.bool_()),
-        ('byte1', pa.int8()),
-        ('short1', pa.int16()),
-        ('int1', pa.int32()),
-        ('long1', pa.int64()),
-        ('float1', pa.float32()),
-        ('double1', pa.float64()),
-        ('bytes1', pa.binary()),
-        ('string1', pa.string()),
-        ('middle', pa.struct([
-            ('list', pa.list_(pa.struct([
-                ('int1', pa.int32()),
-                ('string1', pa.string()),
-                ]))),
-            ])),
-        ('list', pa.list_(pa.struct([
-            ('int1', pa.int32()),
-            ('string1', pa.string()),
-            ]))),
-        ('map', pa.list_(pa.struct([
-            ('key', pa.string()),
-            ('value', pa.struct([
-                ('int1', pa.int32()),
-                ('string1', pa.string()),
-                ])),
-            ]))),
-        ])
+        ("boolean1", pa.bool_()),
+        ("byte1", pa.int8()),
+        ("short1", pa.int16()),
+        ("int1", pa.int32()),
+        ("long1", pa.int64()),
+        ("float1", pa.float32()),
+        ("double1", pa.float64()),
+        ("bytes1", pa.binary()),
+        ("string1", pa.string()),
+        ("middle", pa.struct(
+            [("list", pa.list_(
+                pa.struct([("int1", pa.int32()),
+                           ("string1", pa.string())])))
+             ])),
+        ("list", pa.list_(
+            pa.struct([("int1", pa.int32()),
+                       ("string1", pa.string())])
+        )),
+        ("map", pa.map_(pa.string(),
+                        pa.struct([("int1", pa.int32()),
+                                   ("string1", pa.string())])
+                        )),
+    ])
     assert table.schema == expected_schema
+
+
+def test_orcfile_readwrite():
+    from pyarrow import orc
+
+    buffer_output_stream = pa.BufferOutputStream()
+    a = pa.array([1, None, 3, None])
+    b = pa.array([None, "Arrow", None, "ORC"])
+    table = pa.table({"int64": a, "utf8": b})
+    orc.write_table(buffer_output_stream, table)
+    buffer_reader = pa.BufferReader(buffer_output_stream.getvalue())
+    output_table = orc.ORCFile(buffer_reader).read()
+    assert table.equals(output_table)

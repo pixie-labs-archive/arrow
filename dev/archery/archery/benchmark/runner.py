@@ -22,7 +22,7 @@ import re
 
 from .core import BenchmarkSuite
 from .google import GoogleBenchmarkCommand, GoogleBenchmark
-from ..lang.cpp import CppCMakeDefinition
+from ..lang.cpp import CppCMakeDefinition, CppConfiguration
 from ..utils.cmake import CMakeBuild
 from ..utils.logger import logger
 
@@ -34,10 +34,15 @@ def regex_filter(re_expr):
     return lambda s: re_comp.search(s)
 
 
+DEFAULT_REPETITIONS = 1
+
+
 class BenchmarkRunner:
-    def __init__(self, suite_filter=None, benchmark_filter=None):
+    def __init__(self, suite_filter=None, benchmark_filter=None,
+                 repetitions=DEFAULT_REPETITIONS):
         self.suite_filter = suite_filter
         self.benchmark_filter = benchmark_filter
+        self.repetitions = repetitions
 
     @property
     def suites(self):
@@ -92,7 +97,7 @@ class StaticBenchmarkRunner(BenchmarkRunner):
     def list_benchmarks(self):
         for suite in self._suites:
             for benchmark in suite.benchmarks:
-                yield f"{suite.name}.{benchmark.name}"
+                yield "{}.{}".format(suite.name, benchmark.name)
 
     @property
     def suites(self):
@@ -115,14 +120,17 @@ class StaticBenchmarkRunner(BenchmarkRunner):
 
     @staticmethod
     def from_json(path_or_str, **kwargs):
-        # breaks recursive imports
-        from ..utils.codec import BenchmarkRunnerCodec
-        path_or_str, json_load = (open(path_or_str), json.load) \
-            if os.path.isfile(path_or_str) else (path_or_str, json.loads)
-        return BenchmarkRunnerCodec.decode(json_load(path_or_str), **kwargs)
+        # .codec imported here to break recursive imports
+        from .codec import BenchmarkRunnerCodec
+        if os.path.isfile(path_or_str):
+            with open(path_or_str) as f:
+                loaded = json.load(f)
+        else:
+            loaded = json.loads(path_or_str)
+        return BenchmarkRunnerCodec.decode(loaded, **kwargs)
 
     def __repr__(self):
-        return f"BenchmarkRunner[suites={list(self.suites)}]"
+        return "BenchmarkRunner[suites={}]".format(list(self.suites))
 
 
 class CppBenchmarkRunner(BenchmarkRunner):
@@ -132,6 +140,25 @@ class CppBenchmarkRunner(BenchmarkRunner):
         """ Initialize a CppBenchmarkRunner. """
         self.build = build
         super().__init__(**kwargs)
+
+    @staticmethod
+    def default_configuration(**kwargs):
+        """ Returns the default benchmark configuration. """
+        return CppConfiguration(
+            build_type="release", with_tests=False, with_benchmarks=True,
+            with_compute=True,
+            with_csv=True,
+            with_dataset=True,
+            with_json=True,
+            with_parquet=True,
+            with_python=False,
+            with_brotli=True,
+            with_bz2=True,
+            with_lz4=True,
+            with_snappy=True,
+            with_zlib=True,
+            with_zstd=True,
+            **kwargs)
 
     @property
     def suites_binaries(self):
@@ -151,7 +178,7 @@ class CppBenchmarkRunner(BenchmarkRunner):
         if not benchmark_names:
             return None
 
-        results = suite_cmd.results()
+        results = suite_cmd.results(repetitions=self.repetitions)
         benchmarks = GoogleBenchmark.from_json(results.get("benchmarks"))
         return BenchmarkSuite(name, benchmarks)
 
@@ -160,7 +187,7 @@ class CppBenchmarkRunner(BenchmarkRunner):
         for suite_name, suite_bin in self.suites_binaries.items():
             suite_cmd = GoogleBenchmarkCommand(suite_bin)
             for benchmark_name in suite_cmd.list_benchmarks():
-                yield f"{suite_name}.{benchmark_name}"
+                yield "{}.{}".format(suite_name, benchmark_name)
 
     @property
     def suites(self):
@@ -170,7 +197,7 @@ class CppBenchmarkRunner(BenchmarkRunner):
         suite_and_binaries = self.suites_binaries
         for suite_name in suite_and_binaries:
             if not suite_matcher(suite_name):
-                logger.debug(f"Ignoring suite {suite_name}")
+                logger.debug("Ignoring suite {}".format(suite_name))
                 continue
 
             suite_bin = suite_and_binaries[suite_name]
@@ -178,7 +205,8 @@ class CppBenchmarkRunner(BenchmarkRunner):
 
             # Filter may exclude all benchmarks
             if not suite:
-                logger.debug(f"Suite {suite_name} executed but no results")
+                logger.debug("Suite {} executed but no results"
+                             .format(suite_name))
                 continue
 
             yield suite

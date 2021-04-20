@@ -17,6 +17,7 @@
 
 #include "gandiva/tree_expr_builder.h"
 
+#include <iostream>
 #include <utility>
 
 #include "gandiva/decimal_type_util.h"
@@ -69,10 +70,7 @@ NodePtr TreeExprBuilder::MakeNull(DataTypePtr data_type) {
       return std::make_shared<LiteralNode>(data_type, LiteralHolder((int8_t)0), true);
     case arrow::Type::INT16:
       return std::make_shared<LiteralNode>(data_type, LiteralHolder((int16_t)0), true);
-    case arrow::Type::INT32:
       return std::make_shared<LiteralNode>(data_type, LiteralHolder((int32_t)0), true);
-    case arrow::Type::INT64:
-      return std::make_shared<LiteralNode>(data_type, LiteralHolder((int64_t)0), true);
     case arrow::Type::UINT8:
       return std::make_shared<LiteralNode>(data_type, LiteralHolder((uint8_t)0), true);
     case arrow::Type::UINT16:
@@ -90,13 +88,16 @@ NodePtr TreeExprBuilder::MakeNull(DataTypePtr data_type) {
     case arrow::Type::STRING:
     case arrow::Type::BINARY:
       return std::make_shared<LiteralNode>(data_type, LiteralHolder(empty), true);
-    case arrow::Type::DATE64:
-      return std::make_shared<LiteralNode>(data_type, LiteralHolder((int64_t)0), true);
+    case arrow::Type::INT32:
+    case arrow::Type::DATE32:
     case arrow::Type::TIME32:
+    case arrow::Type::INTERVAL_MONTHS:
       return std::make_shared<LiteralNode>(data_type, LiteralHolder((int32_t)0), true);
+    case arrow::Type::INT64:
+    case arrow::Type::DATE64:
     case arrow::Type::TIME64:
-      return std::make_shared<LiteralNode>(data_type, LiteralHolder((int64_t)0), true);
     case arrow::Type::TIMESTAMP:
+    case arrow::Type::INTERVAL_DAY_TIME:
       return std::make_shared<LiteralNode>(data_type, LiteralHolder((int64_t)0), true);
     case arrow::Type::DECIMAL: {
       std::shared_ptr<arrow::DecimalType> decimal_type =
@@ -187,6 +188,18 @@ ConditionPtr TreeExprBuilder::MakeCondition(const std::string& function,
 
   auto func_node = MakeFunction(function, field_nodes, arrow::boolean());
   return ConditionPtr(new Condition(func_node));
+}
+
+NodePtr TreeExprBuilder::MakeInExpressionDecimal(
+    NodePtr node, std::unordered_set<gandiva::DecimalScalar128>& constants) {
+  int32_t precision = 0;
+  int32_t scale = 0;
+  if (!constants.empty()) {
+    precision = constants.begin()->precision();
+    scale = constants.begin()->scale();
+  }
+  return std::make_shared<InExpressionNode<gandiva::DecimalScalar128>>(node, constants,
+                                                                       precision, scale);
 }
 
 #define MAKE_IN(NAME, ctype)                                        \

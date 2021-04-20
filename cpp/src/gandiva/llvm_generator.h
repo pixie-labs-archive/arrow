@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#ifndef GANDIVA_LLVMGENERATOR_H
-#define GANDIVA_LLVMGENERATOR_H
+#pragma once
 
 #include <cstdint>
 #include <memory>
@@ -74,6 +73,7 @@ class GANDIVA_EXPORT LLVMGenerator {
   SelectionVector::Mode selection_vector_mode() { return selection_vector_mode_; }
   LLVMTypes* types() { return engine_->types(); }
   llvm::Module* module() { return engine_->module(); }
+  std::string DumpIR() { return engine_->DumpIR(); }
 
  private:
   LLVMGenerator();
@@ -90,8 +90,8 @@ class GANDIVA_EXPORT LLVMGenerator {
    public:
     Visitor(LLVMGenerator* generator, llvm::Function* function,
             llvm::BasicBlock* entry_block, llvm::Value* arg_addrs,
-            llvm::Value* arg_local_bitmaps, llvm::Value* arg_context_ptr,
-            llvm::Value* loop_var);
+            llvm::Value* arg_local_bitmaps, std::vector<llvm::Value*> slice_offsets,
+            llvm::Value* arg_context_ptr, llvm::Value* loop_var);
 
     void Visit(const VectorReadValidityDex& dex) override;
     void Visit(const VectorReadFixedLenValueDex& dex) override;
@@ -108,6 +108,7 @@ class GANDIVA_EXPORT LLVMGenerator {
     void Visit(const BooleanOrDex& dex) override;
     void Visit(const InExprDexBase<int32_t>& dex) override;
     void Visit(const InExprDexBase<int64_t>& dex) override;
+    void Visit(const InExprDexBase<gandiva::DecimalScalar128>& dex) override;
     void Visit(const InExprDexBase<std::string>& dex) override;
     template <typename Type>
     void VisitInExpression(const InExprDexBase<Type>& dex);
@@ -146,6 +147,9 @@ class GANDIVA_EXPORT LLVMGenerator {
     // Switch to the entry_block and get reference of the validity/value/offsets buffer
     llvm::Value* GetBufferReference(int idx, BufferType buffer_type, FieldPtr field);
 
+    // Get the slice offset of the validity/value/offsets buffer
+    llvm::Value* GetSliceOffset(int idx);
+
     // Switch to the entry_block and get reference to the local bitmap.
     llvm::Value* GetLocalBitMapReference(int idx);
 
@@ -158,6 +162,7 @@ class GANDIVA_EXPORT LLVMGenerator {
     llvm::BasicBlock* entry_block_;
     llvm::Value* arg_addrs_;
     llvm::Value* arg_local_bitmaps_;
+    std::vector<llvm::Value*> slice_offsets_;
     llvm::Value* arg_context_ptr_;
     llvm::Value* loop_var_;
     bool has_arena_allocs_;
@@ -184,8 +189,8 @@ class GANDIVA_EXPORT LLVMGenerator {
   llvm::Value* GetDataBufferPtrReference(llvm::Value* arg_addrs, int idx, FieldPtr field);
 
   /// Generate code for the value array of one expression.
-  Status CodeGenExprValue(DexPtr value_expr, FieldDescriptorPtr output, int suffix_idx,
-                          llvm::Function** fn,
+  Status CodeGenExprValue(DexPtr value_expr, int num_buffers, FieldDescriptorPtr output,
+                          int suffix_idx, llvm::Function** fn,
                           SelectionVector::Mode selection_vector_mode);
 
   /// Generate code to load the local bitmap specified index and cast it as bitmap.
@@ -239,12 +244,8 @@ class GANDIVA_EXPORT LLVMGenerator {
   SelectionVector::Mode selection_vector_mode_;
 
   // used for debug
-  bool dump_ir_;
-  bool optimise_ir_;
   bool enable_ir_traces_;
   std::vector<std::string> trace_strings_;
 };
 
 }  // namespace gandiva
-
-#endif  // GANDIVA_LLVMGENERATOR_H

@@ -37,7 +37,7 @@ const arrowPaths = [...(argv.arrow || [])];
     }
 
     await Promise.all(jsonPaths.map(async (path, i) => {
-        
+
         const RecordBatchWriter = argv.format !== 'stream'
             ? RecordBatchFileWriter
             : RecordBatchStreamWriter;
@@ -85,7 +85,7 @@ function print_usage() {
     console.log(require('command-line-usage')([
         {
             header: 'json-to-arrow',
-            content: 'Script for converting an JSON Arrow file to a binary Arrow file'
+            content: 'Script for converting a JSON Arrow file to a binary Arrow file'
         },
         {
             header: 'Synopsis',

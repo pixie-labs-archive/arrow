@@ -23,24 +23,29 @@
 #include <chrono>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "arrow/ipc/options.h"
 #include "arrow/ipc/reader.h"
 #include "arrow/ipc/writer.h"
+#include "arrow/result.h"
 #include "arrow/status.h"
+#include "arrow/util/variant.h"
 
 #include "arrow/flight/types.h"  // IWYU pragma: keep
 #include "arrow/flight/visibility.h"
 
 namespace arrow {
 
-class MemoryPool;
 class RecordBatch;
 class Schema;
 
 namespace flight {
 
 class ClientAuthHandler;
+class ClientMiddleware;
+class ClientMiddlewareFactory;
 
 /// \brief A duration type for Flight call timeouts.
 typedef std::chrono::duration<double, std::chrono::seconds::period> TimeoutDuration;
@@ -55,15 +60,67 @@ class ARROW_FLIGHT_EXPORT FlightCallOptions {
   /// mean an implementation-defined default behavior will be used
   /// instead. This is the default value.
   TimeoutDuration timeout;
+
+  /// \brief IPC reader options, if applicable for the call.
+  ipc::IpcReadOptions read_options;
+
+  /// \brief IPC writer options, if applicable for the call.
+  ipc::IpcWriteOptions write_options;
+
+  /// \brief Headers for client to add to context.
+  std::vector<std::pair<std::string, std::string>> headers;
 };
 
-class ARROW_FLIGHT_EXPORT FlightClientOptions {
+/// \brief Indicate that the client attempted to write a message
+///     larger than the soft limit set via write_size_limit_bytes.
+class ARROW_FLIGHT_EXPORT FlightWriteSizeStatusDetail : public arrow::StatusDetail {
  public:
+  explicit FlightWriteSizeStatusDetail(int64_t limit, int64_t actual)
+      : limit_(limit), actual_(actual) {}
+  const char* type_id() const override;
+  std::string ToString() const override;
+  int64_t limit() const { return limit_; }
+  int64_t actual() const { return actual_; }
+
+  /// \brief Extract this status detail from a status, or return
+  ///     nullptr if the status doesn't contain this status detail.
+  static std::shared_ptr<FlightWriteSizeStatusDetail> UnwrapStatus(
+      const arrow::Status& status);
+
+ private:
+  int64_t limit_;
+  int64_t actual_;
+};
+
+struct ARROW_FLIGHT_EXPORT FlightClientOptions {
   /// \brief Root certificates to use for validating server
   /// certificates.
   std::string tls_root_certs;
   /// \brief Override the hostname checked by TLS. Use with caution.
   std::string override_hostname;
+  /// \brief The client certificate to use if using Mutual TLS
+  std::string cert_chain;
+  /// \brief The private key associated with the client certificate for Mutual TLS
+  std::string private_key;
+  /// \brief A list of client middleware to apply.
+  std::vector<std::shared_ptr<ClientMiddlewareFactory>> middleware;
+  /// \brief A soft limit on the number of bytes to write in a single
+  ///     batch when sending Arrow data to a server.
+  ///
+  /// Used to help limit server memory consumption. Only enabled if
+  /// positive. When enabled, FlightStreamWriter.Write* may yield a
+  /// IOError with error detail FlightWriteSizeStatusDetail.
+  int64_t write_size_limit_bytes = 0;
+
+  /// \brief Generic connection options, passed to the underlying
+  ///     transport; interpretation is implementation-dependent.
+  std::vector<std::pair<std::string, util::Variant<int, std::string>>> generic_options;
+
+  /// \brief Use TLS without validating the server certificate. Use with caution.
+  bool disable_server_verification = false;
+
+  /// \brief Get default options.
+  static FlightClientOptions Defaults();
 };
 
 /// \brief A RecordBatchReader exposing Flight metadata and cancel
@@ -83,11 +140,14 @@ class ARROW_FLIGHT_EXPORT FlightStreamReader : public MetadataRecordBatchReader 
 
 /// \brief A RecordBatchWriter that also allows sending
 /// application-defined metadata via the Flight protocol.
-class ARROW_FLIGHT_EXPORT FlightStreamWriter : public ipc::RecordBatchWriter {
+class ARROW_FLIGHT_EXPORT FlightStreamWriter : public MetadataRecordBatchWriter {
  public:
-  virtual Status WriteWithMetadata(const RecordBatch& batch,
-                                   std::shared_ptr<Buffer> app_metadata,
-                                   bool allow_64bit = false) = 0;
+  /// \brief Indicate that the application is done writing to this stream.
+  ///
+  /// The application may not write to this stream after calling
+  /// this. This differs from closing the stream because this writer
+  /// may represent only one half of a readable and writable stream.
+  virtual Status DoneWriting() = 0;
 };
 
 #ifdef _MSC_VER
@@ -132,6 +192,16 @@ class ARROW_FLIGHT_EXPORT FlightClient {
   Status Authenticate(const FlightCallOptions& options,
                       std::unique_ptr<ClientAuthHandler> auth_handler);
 
+  /// \brief Authenticate to the server using basic HTTP style authentication.
+  /// \param[in] options Per-RPC options
+  /// \param[in] username Username to use
+  /// \param[in] password Password to use
+  /// \return Arrow result with bearer token and status OK if client authenticated
+  /// sucessfully
+  arrow::Result<std::pair<std::string, std::string>> AuthenticateBasicToken(
+      const FlightCallOptions& options, const std::string& username,
+      const std::string& password);
+
   /// \brief Perform the indicated action, returning an iterator to the stream
   /// of results, if any
   /// \param[in] options Per-RPC options
@@ -168,6 +238,20 @@ class ARROW_FLIGHT_EXPORT FlightClient {
     return GetFlightInfo({}, descriptor, info);
   }
 
+  /// \brief Request schema for a single flight, which may be an existing
+  /// dataset or a command to be executed
+  /// \param[in] options Per-RPC options
+  /// \param[in] descriptor the dataset request, whether a named dataset or
+  /// command
+  /// \param[out] schema_result the SchemaResult describing the dataset schema
+  /// \return Status
+  Status GetSchema(const FlightCallOptions& options, const FlightDescriptor& descriptor,
+                   std::unique_ptr<SchemaResult>* schema_result);
+  Status GetSchema(const FlightDescriptor& descriptor,
+                   std::unique_ptr<SchemaResult>* schema_result) {
+    return GetSchema({}, descriptor, schema_result);
+  }
+
   /// \brief List all available flights known to the server
   /// \param[out] listing an iterator that returns a FlightInfo for each flight
   /// \return Status
@@ -196,6 +280,11 @@ class ARROW_FLIGHT_EXPORT FlightClient {
   /// \brief Upload data to a Flight described by the given
   /// descriptor. The caller must call Close() on the returned stream
   /// once they are done writing.
+  ///
+  /// The reader and writer are linked; closing the writer will also
+  /// close the reader. Use \a DoneWriting to only close the write
+  /// side of the channel.
+  ///
   /// \param[in] options Per-RPC options
   /// \param[in] descriptor the descriptor of the stream
   /// \param[in] schema the schema for the data to upload
@@ -210,6 +299,15 @@ class ARROW_FLIGHT_EXPORT FlightClient {
                std::unique_ptr<FlightStreamWriter>* stream,
                std::unique_ptr<FlightMetadataReader>* reader) {
     return DoPut({}, descriptor, schema, stream, reader);
+  }
+
+  Status DoExchange(const FlightCallOptions& options, const FlightDescriptor& descriptor,
+                    std::unique_ptr<FlightStreamWriter>* writer,
+                    std::unique_ptr<FlightStreamReader>* reader);
+  Status DoExchange(const FlightDescriptor& descriptor,
+                    std::unique_ptr<FlightStreamWriter>* writer,
+                    std::unique_ptr<FlightStreamReader>* reader) {
+    return DoExchange({}, descriptor, writer, reader);
   }
 
  private:

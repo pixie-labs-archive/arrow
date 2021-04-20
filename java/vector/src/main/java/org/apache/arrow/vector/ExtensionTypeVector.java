@@ -20,16 +20,17 @@ package org.apache.arrow.vector;
 import java.util.Iterator;
 import java.util.List;
 
+import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.OutOfMemoryException;
+import org.apache.arrow.util.Preconditions;
+import org.apache.arrow.vector.compare.VectorVisitor;
 import org.apache.arrow.vector.complex.reader.FieldReader;
 import org.apache.arrow.vector.ipc.message.ArrowFieldNode;
 import org.apache.arrow.vector.types.Types.MinorType;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.util.CallBack;
 import org.apache.arrow.vector.util.TransferPair;
-
-import io.netty.buffer.ArrowBuf;
 
 /**
  * A vector that wraps an underlying vector, used to help implement extension types.
@@ -49,6 +50,7 @@ public abstract class ExtensionTypeVector<T extends BaseValueVector & FieldVecto
    */
   public ExtensionTypeVector(String name, BufferAllocator allocator, T underlyingVector) {
     super(allocator);
+    Preconditions.checkNotNull(underlyingVector, "underlyingVector can not be null.");
     this.name = name;
     this.underlyingVector = underlyingVector;
   }
@@ -255,5 +257,10 @@ public abstract class ExtensionTypeVector<T extends BaseValueVector & FieldVecto
   @Override
   public BufferAllocator getAllocator() {
     return underlyingVector.getAllocator();
+  }
+
+  @Override
+  public <OUT, IN> OUT accept(VectorVisitor<OUT, IN> visitor, IN value) {
+    return getUnderlyingVector().accept(visitor, value);
   }
 }

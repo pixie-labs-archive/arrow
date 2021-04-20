@@ -15,18 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#ifndef GANDIVA_EXPR_ANNOTATOR_H
-#define GANDIVA_EXPR_ANNOTATOR_H
+#pragma once
 
 #include <list>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
+#include "arrow/util/logging.h"
 #include "gandiva/arrow.h"
 #include "gandiva/eval_batch.h"
 #include "gandiva/gandiva_aliases.h"
-#include "gandiva/logging.h"
 #include "gandiva/visibility.h"
 
 namespace gandiva {
@@ -51,6 +50,8 @@ class GANDIVA_EXPORT Annotator {
   /// Prepare an eval batch for the incoming record batch.
   EvalBatchPtr PrepareEvalBatch(const arrow::RecordBatch& record_batch,
                                 const ArrayDataVector& out_vector);
+
+  int buffer_count() { return buffer_count_; }
 
  private:
   /// Annotate a field and return the descriptor.
@@ -78,5 +79,3 @@ class GANDIVA_EXPORT Annotator {
 };
 
 }  // namespace gandiva
-
-#endif  // GANDIVA_EXPR_ANNOTATOR_H

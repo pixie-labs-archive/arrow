@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#ifndef ARROW_ORC_CONVERTER_H
-#define ARROW_ORC_CONVERTER_H
+#pragma once
 
 #include <cstdint>
 #include <memory>
@@ -27,12 +26,11 @@
 #include "arrow/record_batch.h"
 #include "arrow/status.h"
 #include "arrow/type.h"
+#include "arrow/type_fwd.h"
 #include "arrow/util/visibility.h"
 
 namespace arrow {
-
 namespace adapters {
-
 namespace orc {
 
 /// \class ORCFileReader
@@ -109,7 +107,7 @@ class ARROW_EXPORT ORCFileReader {
   Status Seek(int64_t row_number);
 
   /// \brief Get a stripe level record batch iterator with specified row count
-  ///         in each record batch. NextStripeReader serves as an fine grain
+  ///         in each record batch. NextStripeReader serves as a fine grain
   ///         alternative to ReadStripe which may cause OOM issue by loading
   ///         the whole stripes into memory.
   ///
@@ -119,7 +117,7 @@ class ARROW_EXPORT ORCFileReader {
   Status NextStripeReader(int64_t batch_size, std::shared_ptr<RecordBatchReader>* out);
 
   /// \brief Get a stripe level record batch iterator with specified row count
-  ///         in each record batch. NextStripeReader serves as an fine grain
+  ///         in each record batch. NextStripeReader serves as a fine grain
   ///         alternative to ReadStripe which may cause OOM issue by loading
   ///         the whole stripes into memory.
   ///
@@ -143,10 +141,36 @@ class ARROW_EXPORT ORCFileReader {
   ORCFileReader();
 };
 
+/// \class ORCFileWriter
+/// \brief Write an Arrow Table or RecordBatch to an ORC file.
+class ARROW_EXPORT ORCFileWriter {
+ public:
+  ~ORCFileWriter();
+  /// \brief Creates a new ORC writer.
+  ///
+  /// \param[in] output_stream a pointer to the io::OutputStream to write into
+  /// \return the returned writer object
+  static Result<std::unique_ptr<ORCFileWriter>> Open(io::OutputStream* output_stream);
+
+  /// \brief Write a table
+  ///
+  /// \param[in] table the Arrow table from which data is extracted
+  /// \return Status
+  Status Write(const Table& table);
+
+  /// \brief Close an ORC writer (orc::Writer)
+  ///
+  /// \return Status
+  Status Close();
+
+ private:
+  class Impl;
+  std::unique_ptr<Impl> impl_;
+
+ private:
+  ORCFileWriter();
+};
+
 }  // namespace orc
-
 }  // namespace adapters
-
 }  // namespace arrow
-
-#endif  // ARROW_ORC_CONVERTER_H

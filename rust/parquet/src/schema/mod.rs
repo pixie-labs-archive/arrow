@@ -21,10 +21,10 @@
 //!
 //! ```rust
 //! use parquet::{
-//!     basic::{LogicalType, Repetition, Type as PhysicalType},
+//!     basic::{ConvertedType, Repetition, Type as PhysicalType},
 //!     schema::{parser, printer, types::Type},
 //! };
-//! use std::rc::Rc;
+//! use std::sync::Arc;
 //!
 //! // Create the following schema:
 //! //
@@ -34,7 +34,7 @@
 //! // }
 //!
 //! let field_a = Type::primitive_type_builder("a", PhysicalType::BYTE_ARRAY)
-//!     .with_logical_type(LogicalType::UTF8)
+//!     .with_converted_type(ConvertedType::UTF8)
 //!     .with_repetition(Repetition::OPTIONAL)
 //!     .build()
 //!     .unwrap();
@@ -45,7 +45,7 @@
 //!     .unwrap();
 //!
 //! let schema = Type::group_type_builder("schema")
-//!     .with_fields(&mut vec![Rc::new(field_a), Rc::new(field_b)])
+//!     .with_fields(&mut vec![Arc::new(field_a), Arc::new(field_b)])
 //!     .build()
 //!     .unwrap();
 //!

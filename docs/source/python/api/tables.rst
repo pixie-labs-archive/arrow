@@ -28,9 +28,11 @@ Factory Functions
 .. autosummary::
    :toctree: ../generated/
 
-   table
    chunked_array
+   concat_arrays
    concat_tables
+   record_batch
+   table
 
 Classes
 -------

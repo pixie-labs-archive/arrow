@@ -17,6 +17,9 @@
 
 package org.apache.arrow.vector.types.pojo;
 
+import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
 import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -31,15 +34,14 @@ import java.util.UUID;
 
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
+import org.apache.arrow.memory.util.hash.ArrowBufHasher;
 import org.apache.arrow.vector.ExtensionTypeVector;
 import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.FixedSizeBinaryVector;
-import org.apache.arrow.vector.ValueVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.ipc.ArrowFileReader;
 import org.apache.arrow.vector.ipc.ArrowFileWriter;
 import org.apache.arrow.vector.types.pojo.ArrowType.ExtensionType;
-
 import org.junit.Assert;
 import org.junit.Test;
 
@@ -156,6 +158,19 @@ public class TestExtensionType {
     }
   }
 
+  @Test
+  public void testNullCheck() {
+    NullPointerException e = assertThrows(NullPointerException.class,
+        () -> {
+          try (final BufferAllocator allocator = new RootAllocator(Integer.MAX_VALUE);
+               final ExtensionTypeVector vector = new UuidVector("uuid", allocator, null)) {
+            vector.getField();
+            vector.allocateNewSafe();
+          }
+        });
+    assertTrue(e.getMessage().contains("underlyingVector can not be null."));
+  }
+
   static class UuidType extends ExtensionType {
 
     @Override
@@ -207,12 +222,12 @@ public class TestExtensionType {
 
     @Override
     public int hashCode(int index) {
-      return getUnderlyingVector().hashCode(index);
+      return hashCode(index, null);
     }
 
     @Override
-    public boolean equals(int index, ValueVector to, int toIndex) {
-      return getUnderlyingVector().equals(index, to, toIndex);
+    public int hashCode(int index, ArrowBufHasher hasher) {
+      return getUnderlyingVector().hashCode(index, hasher);
     }
 
     public void set(int index, UUID uuid) {

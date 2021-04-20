@@ -17,15 +17,19 @@
 package ipc // import "github.com/apache/arrow/go/arrow/ipc"
 
 import (
-	"fmt"
+	"bytes"
+	"context"
+	"encoding/binary"
 	"io"
 	"math"
+	"sync"
 
 	"github.com/apache/arrow/go/arrow"
 	"github.com/apache/arrow/go/arrow/array"
-	"github.com/apache/arrow/go/arrow/internal/bitutil"
+	"github.com/apache/arrow/go/arrow/bitutil"
+	"github.com/apache/arrow/go/arrow/internal/flatbuf"
 	"github.com/apache/arrow/go/arrow/memory"
-	"github.com/pkg/errors"
+	"golang.org/x/xerrors"
 )
 
 type swriter struct {
@@ -33,13 +37,13 @@ type swriter struct {
 	pos int64
 }
 
-func (w *swriter) start() error { return nil }
+func (w *swriter) Start() error { return nil }
 func (w *swriter) Close() error {
 	_, err := w.Write(kEOS[:])
 	return err
 }
 
-func (w *swriter) write(p payload) error {
+func (w *swriter) WritePayload(p Payload) error {
 	_, err := writeIPCPayload(w, p)
 	if err != nil {
 		return err
@@ -58,10 +62,26 @@ type Writer struct {
 	w io.Writer
 
 	mem memory.Allocator
-	pw  payloadWriter
+	pw  PayloadWriter
 
-	started bool
-	schema  *arrow.Schema
+	started    bool
+	schema     *arrow.Schema
+	codec      flatbuf.CompressionType
+	compressNP int
+}
+
+// NewWriterWithPayloadWriter constructs a writer with the provided payload writer
+// instead of the default stream payload writer. This makes the writer more
+// reusable such as by the Arrow Flight writer.
+func NewWriterWithPayloadWriter(pw PayloadWriter, opts ...Option) *Writer {
+	cfg := newConfig(opts...)
+	return &Writer{
+		mem:        cfg.alloc,
+		pw:         pw,
+		schema:     cfg.schema,
+		codec:      cfg.codec,
+		compressNP: cfg.compressNP,
+	}
 }
 
 // NewWriter returns a writer that writes records to the provided output stream.
@@ -72,6 +92,7 @@ func NewWriter(w io.Writer, opts ...Option) *Writer {
 		mem:    cfg.alloc,
 		pw:     &swriter{w: w},
 		schema: cfg.schema,
+		codec:  cfg.codec,
 	}
 }
 
@@ -89,7 +110,7 @@ func (w *Writer) Close() error {
 
 	err := w.pw.Close()
 	if err != nil {
-		return errors.Wrap(err, "arrow/ipc: could not close payload writer")
+		return xerrors.Errorf("arrow/ipc: could not close payload writer: %w", err)
 	}
 	w.pw = nil
 
@@ -111,16 +132,16 @@ func (w *Writer) Write(rec array.Record) error {
 
 	const allow64b = true
 	var (
-		data = payload{msg: MessageRecordBatch}
-		enc  = newRecordEncoder(w.mem, 0, kMaxNestingDepth, allow64b)
+		data = Payload{msg: MessageRecordBatch}
+		enc  = newRecordEncoder(w.mem, 0, kMaxNestingDepth, allow64b, w.codec, w.compressNP)
 	)
 	defer data.Release()
 
 	if err := enc.Encode(&data, rec); err != nil {
-		return errors.Wrap(err, "arrow/ipc: could not encode record to payload")
+		return xerrors.Errorf("arrow/ipc: could not encode record to payload: %w", err)
 	}
 
-	return w.pw.write(data)
+	return w.pw.WritePayload(data)
 }
 
 func (w *Writer) start() error {
@@ -131,7 +152,7 @@ func (w *Writer) start() error {
 	defer ps.Release()
 
 	for _, data := range ps {
-		err := w.pw.write(data)
+		err := w.pw.WritePayload(data)
 		if err != nil {
 			return err
 		}
@@ -146,28 +167,111 @@ type recordEncoder struct {
 	fields []fieldMetadata
 	meta   []bufferMetadata
 
-	depth    int64
-	start    int64
-	allow64b bool
+	depth      int64
+	start      int64
+	allow64b   bool
+	codec      flatbuf.CompressionType
+	compressNP int
 }
 
-func newRecordEncoder(mem memory.Allocator, startOffset, maxDepth int64, allow64b bool) *recordEncoder {
+func newRecordEncoder(mem memory.Allocator, startOffset, maxDepth int64, allow64b bool, codec flatbuf.CompressionType, compressNP int) *recordEncoder {
 	return &recordEncoder{
-		mem:      mem,
-		start:    startOffset,
-		depth:    maxDepth,
-		allow64b: allow64b,
+		mem:        mem,
+		start:      startOffset,
+		depth:      maxDepth,
+		allow64b:   allow64b,
+		codec:      codec,
+		compressNP: compressNP,
 	}
 }
 
-func (w *recordEncoder) Encode(p *payload, rec array.Record) error {
+func (w *recordEncoder) compressBodyBuffers(p *Payload) error {
+	compress := func(idx int, codec compressor) error {
+		if p.body[idx] == nil || p.body[idx].Len() == 0 {
+			return nil
+		}
+		var buf bytes.Buffer
+		buf.Grow(codec.MaxCompressedLen(p.body[idx].Len()) + arrow.Int64SizeBytes)
+		if err := binary.Write(&buf, binary.LittleEndian, uint64(p.body[idx].Len())); err != nil {
+			return err
+		}
+		codec.Reset(&buf)
+		if _, err := codec.Write(p.body[idx].Bytes()); err != nil {
+			return err
+		}
+		if err := codec.Close(); err != nil {
+			return err
+		}
+		p.body[idx] = memory.NewBufferBytes(buf.Bytes())
+		return nil
+	}
+
+	if w.compressNP <= 1 {
+		codec := getCompressor(w.codec)
+		for idx := range p.body {
+			if err := compress(idx, codec); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	var (
+		wg          sync.WaitGroup
+		ch          = make(chan int)
+		errch       = make(chan error)
+		ctx, cancel = context.WithCancel(context.Background())
+	)
+	defer cancel()
+
+	for i := 0; i < w.compressNP; i++ {
+		go func() {
+			defer wg.Done()
+			codec := getCompressor(w.codec)
+			for {
+				select {
+				case idx, ok := <-ch:
+					if !ok {
+						// we're done, channel is closed!
+						return
+					}
+
+					if err := compress(idx, codec); err != nil {
+						errch <- err
+						cancel()
+						return
+					}
+				case <-ctx.Done():
+					// cancelled, return early
+					return
+				}
+			}
+		}()
+	}
+
+	for idx := range p.body {
+		ch <- idx
+	}
+
+	close(ch)
+	wg.Wait()
+	close(errch)
+
+	return <-errch
+}
+
+func (w *recordEncoder) Encode(p *Payload, rec array.Record) error {
 
 	// perform depth-first traversal of the row-batch
 	for i, col := range rec.Columns() {
 		err := w.visit(p, col)
 		if err != nil {
-			return errors.Wrapf(err, "arrow/ipc: could not encode column %d (%q)", i, rec.ColumnName(i))
+			return xerrors.Errorf("arrow/ipc: could not encode column %d (%q): %w", i, rec.ColumnName(i), err)
 		}
+	}
+
+	if w.codec != -1 {
+		w.compressBodyBuffers(p)
 	}
 
 	// position for the start of a buffer relative to the passed frame of reference.
@@ -188,7 +292,9 @@ func (w *recordEncoder) Encode(p *payload, rec array.Record) error {
 		}
 		w.meta[i] = bufferMetadata{
 			Offset: offset,
-			Len:    size + padding,
+			// even though we add padding, we need the Len to be correct
+			// so that decompressing works properly.
+			Len: size,
 		}
 		offset += size + padding
 	}
@@ -201,7 +307,7 @@ func (w *recordEncoder) Encode(p *payload, rec array.Record) error {
 	return w.encodeMetadata(p, rec.NumRows())
 }
 
-func (w *recordEncoder) visit(p *payload, arr array.Interface) error {
+func (w *recordEncoder) visit(p *Payload, arr array.Interface) error {
 	if w.depth <= 0 {
 		return errMaxRecursion
 	}
@@ -221,14 +327,19 @@ func (w *recordEncoder) visit(p *payload, arr array.Interface) error {
 	case 0:
 		p.body = append(p.body, nil)
 	default:
-		data := arr.Data()
-		bitmap := newTruncatedBitmap(w.mem, int64(data.Offset()), int64(data.Len()), data.Buffers()[0])
-		p.body = append(p.body, bitmap)
+		switch arr.DataType().ID() {
+		case arrow.NULL:
+			// Null type has no validity bitmap
+		default:
+			data := arr.Data()
+			bitmap := newTruncatedBitmap(w.mem, int64(data.Offset()), int64(data.Len()), data.Buffers()[0])
+			p.body = append(p.body, bitmap)
+		}
 	}
 
 	switch dtype := arr.DataType().(type) {
 	case *arrow.NullType:
-		p.body = append(p.body, nil)
+		// ok. NullArrays are completely empty.
 
 	case *arrow.BooleanType:
 		var (
@@ -267,7 +378,7 @@ func (w *recordEncoder) visit(p *payload, arr array.Interface) error {
 		arr := arr.(*array.Binary)
 		voffsets, err := w.getZeroBasedValueOffsets(arr)
 		if err != nil {
-			return errors.Wrapf(err, "could not retrieve zero-based value offsets from %T", arr)
+			return xerrors.Errorf("could not retrieve zero-based value offsets from %T: %w", arr, err)
 		}
 		data := arr.Data()
 		values := data.Buffers()[2]
@@ -299,7 +410,7 @@ func (w *recordEncoder) visit(p *payload, arr array.Interface) error {
 		arr := arr.(*array.String)
 		voffsets, err := w.getZeroBasedValueOffsets(arr)
 		if err != nil {
-			return errors.Wrapf(err, "could not retrieve zero-based value offsets from %T", arr)
+			return xerrors.Errorf("could not retrieve zero-based value offsets from %T: %w", arr, err)
 		}
 		data := arr.Data()
 		values := data.Buffers()[2]
@@ -333,7 +444,7 @@ func (w *recordEncoder) visit(p *payload, arr array.Interface) error {
 		for i := 0; i < arr.NumField(); i++ {
 			err := w.visit(p, arr.Field(i))
 			if err != nil {
-				return errors.Wrapf(err, "could not visit field %d of struct-array", i)
+				return xerrors.Errorf("could not visit field %d of struct-array: %w", i, err)
 			}
 		}
 		w.depth++
@@ -342,7 +453,7 @@ func (w *recordEncoder) visit(p *payload, arr array.Interface) error {
 		arr := arr.(*array.List)
 		voffsets, err := w.getZeroBasedValueOffsets(arr)
 		if err != nil {
-			return errors.Wrapf(err, "could not retrieve zero-based value offsets for array %T", arr)
+			return xerrors.Errorf("could not retrieve zero-based value offsets for array %T: %w", arr, err)
 		}
 		p.body = append(p.body, voffsets)
 
@@ -372,7 +483,7 @@ func (w *recordEncoder) visit(p *payload, arr array.Interface) error {
 		err = w.visit(p, values)
 
 		if err != nil {
-			return errors.Wrapf(err, "could not visit list element for array %T", arr)
+			return xerrors.Errorf("could not visit list element for array %T: %w", arr, err)
 		}
 		w.depth++
 
@@ -391,12 +502,12 @@ func (w *recordEncoder) visit(p *payload, arr array.Interface) error {
 		err := w.visit(p, values)
 
 		if err != nil {
-			return errors.Wrapf(err, "could not visit list element for array %T", arr)
+			return xerrors.Errorf("could not visit list element for array %T: %w", arr, err)
 		}
 		w.depth++
 
 	default:
-		panic(errors.Errorf("arrow/ipc: unknown array %T (dtype=%T)", arr, dtype))
+		panic(xerrors.Errorf("arrow/ipc: unknown array %T (dtype=%T)", arr, dtype))
 	}
 
 	return nil
@@ -407,7 +518,7 @@ func (w *recordEncoder) getZeroBasedValueOffsets(arr array.Interface) (*memory.B
 	voffsets := data.Buffers()[1]
 	if data.Offset() != 0 {
 		// FIXME(sbinet): writer.cc:231
-		panic(fmt.Errorf("not implemented offset=%d", data.Offset()))
+		panic(xerrors.Errorf("not implemented offset=%d", data.Offset()))
 	}
 	if voffsets == nil || voffsets.Len() == 0 {
 		return nil, nil
@@ -417,8 +528,8 @@ func (w *recordEncoder) getZeroBasedValueOffsets(arr array.Interface) (*memory.B
 	return voffsets, nil
 }
 
-func (w *recordEncoder) encodeMetadata(p *payload, nrows int64) error {
-	p.meta = writeRecordMessage(w.mem, nrows, p.size, w.fields, w.meta)
+func (w *recordEncoder) encodeMetadata(p *Payload, nrows int64) error {
+	p.meta = writeRecordMessage(w.mem, nrows, p.size, w.fields, w.meta, w.codec)
 	return nil
 }
 

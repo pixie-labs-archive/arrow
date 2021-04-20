@@ -19,7 +19,7 @@
 
 #pragma once
 
-#include <arrow-glib/decimal128.h>
+#include <arrow-glib/decimal.h>
 #include <arrow-glib/type.h>
 #include <arrow-glib/version.h>
 
@@ -40,6 +40,9 @@ gboolean   garrow_data_type_equal     (GArrowDataType *data_type,
                                        GArrowDataType *other_data_type);
 gchar     *garrow_data_type_to_string (GArrowDataType *data_type);
 GArrowType garrow_data_type_get_id    (GArrowDataType *data_type);
+GARROW_AVAILABLE_IN_3_0
+gchar *
+garrow_data_type_get_name(GArrowDataType *data_type);
 
 
 #define GARROW_TYPE_FIXED_WIDTH_DATA_TYPE (garrow_fixed_width_data_type_get_type())
@@ -111,6 +114,8 @@ struct _GArrowIntegerDataTypeClass
   GArrowNumericDataTypeClass parent_class;
 };
 
+GARROW_AVAILABLE_IN_0_16
+gboolean garrow_integer_data_type_is_signed(GArrowIntegerDataType *data_type);
 
 #define GARROW_TYPE_INT8_DATA_TYPE (garrow_int8_data_type_get_type())
 G_DECLARE_DERIVABLE_TYPE(GArrowInt8DataType,
@@ -298,18 +303,48 @@ gint32
 garrow_fixed_size_binary_data_type_get_byte_width(GArrowFixedSizeBinaryDataType *data_type);
 
 
+#define GARROW_TYPE_LARGE_BINARY_DATA_TYPE (garrow_large_binary_data_type_get_type())
+G_DECLARE_DERIVABLE_TYPE(GArrowLargeBinaryDataType,
+                         garrow_large_binary_data_type,
+                         GARROW,
+                         LARGE_BINARY_DATA_TYPE,
+                         GArrowDataType)
+struct _GArrowLargeBinaryDataTypeClass
+{
+  GArrowDataTypeClass parent_class;
+};
+
+GARROW_AVAILABLE_IN_0_17
+GArrowLargeBinaryDataType *garrow_large_binary_data_type_new(void);
+
+
 #define GARROW_TYPE_STRING_DATA_TYPE (garrow_string_data_type_get_type())
 G_DECLARE_DERIVABLE_TYPE(GArrowStringDataType,
                          garrow_string_data_type,
                          GARROW,
                          STRING_DATA_TYPE,
-                         GArrowDataType)
+                         GArrowBinaryDataType)
 struct _GArrowStringDataTypeClass
 {
-  GArrowDataTypeClass parent_class;
+  GArrowBinaryDataTypeClass parent_class;
 };
 
 GArrowStringDataType *garrow_string_data_type_new      (void);
+
+
+#define GARROW_TYPE_LARGE_STRING_DATA_TYPE (garrow_large_string_data_type_get_type())
+G_DECLARE_DERIVABLE_TYPE(GArrowLargeStringDataType,
+                         garrow_large_string_data_type,
+                         GARROW,
+                         LARGE_STRING_DATA_TYPE,
+                         GArrowLargeBinaryDataType)
+struct _GArrowLargeStringDataTypeClass
+{
+  GArrowLargeBinaryDataTypeClass parent_class;
+};
+
+GARROW_AVAILABLE_IN_0_17
+GArrowLargeStringDataType *garrow_large_string_data_type_new(void);
 
 
 #define GARROW_TYPE_DATE32_DATA_TYPE (garrow_date32_data_type_get_type())
@@ -431,8 +466,121 @@ struct _GArrowDecimal128DataTypeClass
   GArrowDecimalDataTypeClass parent_class;
 };
 
+GARROW_AVAILABLE_IN_3_0
+gint32
+garrow_decimal128_data_type_max_precision();
+
 GARROW_AVAILABLE_IN_0_12
 GArrowDecimal128DataType *
 garrow_decimal128_data_type_new(gint32 precision, gint32 scale);
+
+
+#define GARROW_TYPE_DECIMAL256_DATA_TYPE (garrow_decimal256_data_type_get_type())
+G_DECLARE_DERIVABLE_TYPE(GArrowDecimal256DataType,
+                         garrow_decimal256_data_type,
+                         GARROW,
+                         DECIMAL256_DATA_TYPE,
+                         GArrowDecimalDataType)
+struct _GArrowDecimal256DataTypeClass
+{
+  GArrowDecimalDataTypeClass parent_class;
+};
+
+GARROW_AVAILABLE_IN_3_0
+gint32
+garrow_decimal256_data_type_max_precision();
+
+GARROW_AVAILABLE_IN_3_0
+GArrowDecimal256DataType *
+garrow_decimal256_data_type_new(gint32 precision, gint32 scale);
+
+#define GARROW_TYPE_EXTENSION_DATA_TYPE (garrow_extension_data_type_get_type())
+G_DECLARE_DERIVABLE_TYPE(GArrowExtensionDataType,
+                         garrow_extension_data_type,
+                         GARROW,
+                         EXTENSION_DATA_TYPE,
+                         GArrowDataType)
+/**
+ * GArrowExtensionDataTypeClass:
+ * @get_extension_name: It must returns the name of this extension data type.
+ * @equal: It must returns %TRUE only when the both data types equal, %FALSE
+ *   otherwise.
+ * @deserialize: It must returns a serialized #GArrowDataType from the given
+ *   `serialized_data`.
+ * @serialize: It must returns a serialized data of this extension data type
+ *   to deserialize later.
+ * @get_array_gtype: It must returns #GType for corresponding extension array
+ *   class.
+ *
+ * Since: 3.0.0
+ */
+struct _GArrowExtensionDataTypeClass
+{
+  GArrowDataTypeClass parent_class;
+
+  gchar *(*get_extension_name)(GArrowExtensionDataType *data_type);
+  gboolean (*equal)(GArrowExtensionDataType *data_type,
+                    GArrowExtensionDataType *other_data_type);
+  GArrowDataType *(*deserialize)(GArrowExtensionDataType *data_type,
+                                 GArrowDataType *storage_data_type,
+                                 GBytes *serialized_data,
+                                 GError **error);
+  GBytes *(*serialize)(GArrowExtensionDataType *data_type);
+  GType (*get_array_gtype)(GArrowExtensionDataType *data_type);
+};
+
+GARROW_AVAILABLE_IN_3_0
+gchar *
+garrow_extension_data_type_get_extension_name(GArrowExtensionDataType *data_type);
+
+typedef struct _GArrowArray GArrowArray;
+typedef struct _GArrowExtensionArray GArrowExtensionArray;
+
+GARROW_AVAILABLE_IN_3_0
+GArrowExtensionArray *
+garrow_extension_data_type_wrap_array(GArrowExtensionDataType *data_type,
+                                      GArrowArray *storage);
+
+typedef struct _GArrowChunkedArray GArrowChunkedArray;
+
+GARROW_AVAILABLE_IN_3_0
+GArrowChunkedArray *
+garrow_extension_data_type_wrap_chunked_array(GArrowExtensionDataType *data_type,
+                                              GArrowChunkedArray *storage);
+
+
+#define GARROW_TYPE_EXTENSION_DATA_TYPE_REGISTRY        \
+  (garrow_extension_data_type_registry_get_type())
+G_DECLARE_DERIVABLE_TYPE(GArrowExtensionDataTypeRegistry,
+                         garrow_extension_data_type_registry,
+                         GARROW,
+                         EXTENSION_DATA_TYPE_REGISTRY,
+                         GObject)
+struct _GArrowExtensionDataTypeRegistryClass
+{
+  GObjectClass parent_class;
+};
+
+GARROW_AVAILABLE_IN_3_0
+GArrowExtensionDataTypeRegistry *
+garrow_extension_data_type_registry_default(void);
+
+GARROW_AVAILABLE_IN_3_0
+gboolean
+garrow_extension_data_type_registry_register(
+  GArrowExtensionDataTypeRegistry *registry,
+  GArrowExtensionDataType *data_type,
+  GError **error);
+GARROW_AVAILABLE_IN_3_0
+gboolean
+garrow_extension_data_type_registry_unregister(
+  GArrowExtensionDataTypeRegistry *registry,
+  const gchar *name,
+  GError **error);
+GARROW_AVAILABLE_IN_3_0
+GArrowExtensionDataType *
+garrow_extension_data_type_registry_lookup(
+  GArrowExtensionDataTypeRegistry *registry,
+  const gchar *name);
 
 G_END_DECLS

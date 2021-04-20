@@ -15,11 +15,18 @@
 # specific language governing permissions and limitations
 # under the License.
 
-class TestComapre < Test::Unit::TestCase
+class TestCompare < Test::Unit::TestCase
   include Helper::Buildable
 
   def setup
     @options = Arrow::CompareOptions.new
+  end
+
+  sub_test_case("CompareOptions") do
+    def test_default_operator
+      assert_equal(Arrow::CompareOperator::EQUAL,
+                   @options.operator)
+    end
   end
 
   sub_test_case("operator") do

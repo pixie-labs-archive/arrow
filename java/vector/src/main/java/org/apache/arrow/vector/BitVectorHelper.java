@@ -20,12 +20,15 @@ package org.apache.arrow.vector;
 import static io.netty.util.internal.PlatformDependent.getByte;
 import static io.netty.util.internal.PlatformDependent.getInt;
 import static io.netty.util.internal.PlatformDependent.getLong;
+import static org.apache.arrow.memory.util.LargeMemoryUtil.checkedCastToInt;
 
+import org.apache.arrow.memory.ArrowBuf;
+import org.apache.arrow.memory.BoundsChecking;
 import org.apache.arrow.memory.BufferAllocator;
-import org.apache.arrow.util.DataSizeRoundingUtil;
 import org.apache.arrow.vector.ipc.message.ArrowFieldNode;
+import org.apache.arrow.vector.util.DataSizeRoundingUtil;
 
-import io.netty.buffer.ArrowBuf;
+import io.netty.util.internal.PlatformDependent;
 
 /**
  * Helper class for performing generic operations on a bit vector buffer.
@@ -34,6 +37,20 @@ import io.netty.buffer.ArrowBuf;
 public class BitVectorHelper {
 
   private BitVectorHelper() {}
+
+  /**
+   * Get the index of byte corresponding to bit index in validity buffer.
+   */
+  public static long byteIndex(long absoluteBitIndex) {
+    return absoluteBitIndex >> 3;
+  }
+
+  /**
+   * Get the relative index of bit within the byte in validity buffer.
+   */
+  public static int bitIndex(long absoluteBitIndex) {
+    return checkedCastToInt(absoluteBitIndex & 7);
+  }
 
   /**
    * Get the index of byte corresponding to bit index in validity buffer.
@@ -55,12 +72,51 @@ public class BitVectorHelper {
    * @param validityBuffer validity buffer of the vector
    * @param index index to be set
    */
+  public static void setBit(ArrowBuf validityBuffer, long index) {
+    // it can be observed that some logic is duplicate of the logic in setValidityBit.
+    // this is because JIT cannot always remove the if branch in setValidityBit,
+    // so we give a dedicated implementation for setting bits.
+    final long byteIndex = byteIndex(index);
+    final int bitIndex = bitIndex(index);
+
+    // the byte is promoted to an int, because according to Java specification,
+    // bytes will be promoted to ints automatically, upon expression evaluation.
+    // by promoting it manually, we avoid the unnecessary conversions.
+    int currentByte = validityBuffer.getByte(byteIndex);
+    final int bitMask = 1 << bitIndex;
+    currentByte |= bitMask;
+    validityBuffer.setByte(byteIndex, currentByte);
+  }
+
+  /**
+   * Set the bit at provided index to 1.
+   *
+   * @deprecated Please use {@link BitVectorHelper#setBit(ArrowBuf, long)} instead..
+   */
+  @Deprecated
   public static void setValidityBitToOne(ArrowBuf validityBuffer, int index) {
+    setBit(validityBuffer, index);
+  }
+
+  /**
+   * Set the bit at provided index to 0.
+   *
+   * @param validityBuffer validity buffer of the vector
+   * @param index index to be set
+   */
+  public static void unsetBit(ArrowBuf validityBuffer, int index) {
+    // it can be observed that some logic is duplicate of the logic in setValidityBit.
+    // this is because JIT cannot always remove the if branch in setValidityBit,
+    // so we give a dedicated implementation for unsetting bits.
     final int byteIndex = byteIndex(index);
     final int bitIndex = bitIndex(index);
-    byte currentByte = validityBuffer.getByte(byteIndex);
-    final byte bitMask = (byte) (1L << bitIndex);
-    currentByte |= bitMask;
+
+    // the byte is promoted to an int, because according to Java specification,
+    // bytes will be promoted to ints automatically, upon expression evaluation.
+    // by promoting it manually, we avoid the unnecessary conversions.
+    int currentByte = validityBuffer.getByte(byteIndex);
+    final int bitMask = 1 << bitIndex;
+    currentByte &= ~bitMask;
     validityBuffer.setByte(byteIndex, currentByte);
   }
 
@@ -74,12 +130,16 @@ public class BitVectorHelper {
   public static void setValidityBit(ArrowBuf validityBuffer, int index, int value) {
     final int byteIndex = byteIndex(index);
     final int bitIndex = bitIndex(index);
-    byte currentByte = validityBuffer.getByte(byteIndex);
-    final byte bitMask = (byte) (1L << bitIndex);
+
+    // the byte is promoted to an int, because according to Java specification,
+    // bytes will be promoted to ints automatically, upon expression evaluation.
+    // by promoting it manually, we avoid the unnecessary conversions.
+    int currentByte = validityBuffer.getByte(byteIndex);
+    final int bitMask = 1 << bitIndex;
     if (value != 0) {
       currentByte |= bitMask;
     } else {
-      currentByte -= (bitMask & currentByte);
+      currentByte &= ~bitMask;
     }
     validityBuffer.setByte(byteIndex, currentByte);
   }
@@ -158,7 +218,7 @@ public class BitVectorHelper {
       index += 8;
     }
 
-    while (index + 4 <= fullBytesCount) {
+    if (index + 4 <= fullBytesCount) {
       int intValue = validityBuffer.getInt(index);
       count += Integer.bitCount(intValue);
       index += 4;
@@ -217,7 +277,7 @@ public class BitVectorHelper {
       index += 8;
     }
 
-    while (index + 4 <= fullBytesCount) {
+    if (index + 4 <= fullBytesCount) {
       int intValue = getInt(validityBuffer.memoryAddress() + index);
       if (intValue != intToCompare) {
         return false;
@@ -288,9 +348,7 @@ public class BitVectorHelper {
       }
       /* all non-NULLs */
       int fullBytesCount = valueCount / 8;
-      for (int i = 0; i < fullBytesCount; ++i) {
-        newBuffer.setByte(i, 0xFF);
-      }
+      newBuffer.setOne(0, fullBytesCount);
       int remainder = valueCount % 8;
       if (remainder > 0) {
         byte bitMask = (byte) (0xFFL >>> ((8 - remainder) & 7));
@@ -318,5 +376,84 @@ public class BitVectorHelper {
     byte currentByte = data.getByte(byteIndex);
     currentByte |= bitMask;
     data.setByte(byteIndex, currentByte);
+  }
+
+  /**
+   * Concat two validity buffers.
+   * @param input1 the first validity buffer.
+   * @param numBits1 the number of bits in the first validity buffer.
+   * @param input2 the second validity buffer.
+   * @param numBits2 the number of bits in the second validity buffer.
+   * @param output the output validity buffer. It can be the same one as the first input.
+   *     The caller must make sure the output buffer has enough capacity.
+   */
+  public static void concatBits(ArrowBuf input1, int numBits1, ArrowBuf input2, int numBits2, ArrowBuf output) {
+    int numBytes1 = DataSizeRoundingUtil.divideBy8Ceil(numBits1);
+    int numBytes2 = DataSizeRoundingUtil.divideBy8Ceil(numBits2);
+    int numBytesOut = DataSizeRoundingUtil.divideBy8Ceil(numBits1 + numBits2);
+
+    if (BoundsChecking.BOUNDS_CHECKING_ENABLED) {
+      output.checkBytes(0, numBytesOut);
+    }
+
+    // copy the first bit set
+    if (input1 != output) {
+      PlatformDependent.copyMemory(input1.memoryAddress(), output.memoryAddress(), numBytes1);
+    }
+
+    if (bitIndex(numBits1) == 0) {
+      // The number of bits for the first bit set is a multiple of 8, so the boundary is at byte boundary.
+      // For this case, we have a shortcut to copy all bytes from the second set after the byte boundary.
+      PlatformDependent.copyMemory(input2.memoryAddress(), output.memoryAddress() + numBytes1, numBytes2);
+      return;
+    }
+
+    // the number of bits to fill a full byte after the first input is processed
+    int numBitsToFill = 8 - bitIndex(numBits1);
+
+    // mask to clear high bits
+    int mask = (1 << (8 - numBitsToFill)) - 1;
+
+    int numFullBytes = numBits2 / 8;
+
+    int prevByte = output.getByte(numBytes1 - 1) & mask;
+    for (int i = 0; i < numFullBytes; i++) {
+      int curByte = input2.getByte(i) & 0xff;
+
+      // first fill the bits to a full byte
+      int byteToFill = (curByte << (8 - numBitsToFill)) & 0xff;
+      output.setByte(numBytes1 + i - 1, byteToFill | prevByte);
+
+      // fill remaining bits in the current byte
+      // note that it is also the previous byte for the next iteration
+      prevByte = curByte >>> numBitsToFill;
+    }
+
+    int lastOutputByte = prevByte;
+
+    // the number of extra bits for the second input, relative to full bytes
+    int numTrailingBits = bitIndex(numBits2);
+
+    if (numTrailingBits == 0) {
+      output.setByte(numBytes1 + numFullBytes - 1, lastOutputByte);
+      return;
+    }
+
+    // process remaining bits from input2
+    int remByte = input2.getByte(numBytes2 - 1) & 0xff;
+
+    int byteToFill = remByte << (8 - numBitsToFill);
+    lastOutputByte |= byteToFill;
+
+    output.setByte(numBytes1 + numFullBytes - 1, lastOutputByte);
+
+    if (numTrailingBits > numBitsToFill) {
+      // clear all bits for the last byte before writing
+      output.setByte(numBytes1 + numFullBytes, 0);
+
+      // some remaining bits cannot be filled in the previous byte
+      int leftByte = remByte >>> numBitsToFill;
+      output.setByte(numBytes1 + numFullBytes, leftByte);
+    }
   }
 }

@@ -20,13 +20,16 @@ package org.apache.arrow.gandiva.evaluator;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.arrow.gandiva.exceptions.GandivaException;
 import org.apache.arrow.gandiva.expression.Condition;
 import org.apache.arrow.gandiva.expression.ExpressionTree;
+import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.DecimalVector;
@@ -40,8 +43,6 @@ import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.junit.After;
 import org.junit.Before;
-
-import io.netty.buffer.ArrowBuf;
 
 class BaseEvaluatorTest {
 
@@ -236,12 +237,21 @@ class BaseEvaluatorTest {
     DecimalVector vector = new DecimalVector("decimal" + Math.random(), allocator, precision, scale);
     vector.allocateNew();
     for (int i = 0; i < values.length; i++) {
-      BigDecimal decimal = new BigDecimal(values[i]);
+      BigDecimal decimal = new BigDecimal(values[i]).setScale(scale);
       vector.setSafe(i, decimal);
     }
 
     vector.setValueCount(values.length);
     return vector;
+  }
+
+  Set decimalSet(String[] values, Integer scale) {
+    Set<BigDecimal> decimalSet = new HashSet<>();
+    for (int i = 0; i < values.length; i++) {
+      decimalSet.add(new BigDecimal(values[i]).setScale(scale));
+    }
+
+    return decimalSet;
   }
 
   VarCharVector varcharVector(String[] values) {
@@ -279,6 +289,15 @@ class BaseEvaluatorTest {
       buffer.writeLong(instant.toEpochMilli());
     }
 
+    return buffer;
+  }
+
+  ArrowBuf stringToDayInterval(String[] values) {
+    ArrowBuf buffer = allocator.buffer(values.length * 8);
+    for (int i = 0; i < values.length; i++) {
+      buffer.writeInt(Integer.parseInt(values[i].split(" ")[0])); // days
+      buffer.writeInt(Integer.parseInt(values[i].split(" ")[1])); // millis
+    }
     return buffer;
   }
 

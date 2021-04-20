@@ -26,7 +26,8 @@ sources = files(
   'codec.cpp',
   'composite-array.cpp',
   'composite-data-type.cpp',
-  'decimal128.cpp',
+  'datum.cpp',
+  'decimal.cpp',
   'error.cpp',
   'field.cpp',
   'record-batch.cpp',
@@ -48,6 +49,7 @@ sources += files(
 )
 
 sources += files(
+  'ipc-options.cpp',
   'metadata-version.cpp',
   'reader.cpp',
   'writer.cpp',
@@ -55,6 +57,11 @@ sources += files(
 
 sources += files(
   'compute.cpp',
+)
+
+sources += files(
+  'file-system.cpp',
+  'local-file-system.cpp',
 )
 
 if have_arrow_orc
@@ -75,7 +82,8 @@ c_headers = files(
   'composite-array.h',
   'composite-data-type.h',
   'data-type.h',
-  'decimal128.h',
+  'datum.h',
+  'decimal.h',
   'error.h',
   'field.h',
   'gobject-type.h',
@@ -99,6 +107,7 @@ c_headers += files(
 )
 
 c_headers += files(
+  'ipc-options.h',
   'metadata-version.h',
   'reader.h',
   'writer.h',
@@ -106,6 +115,11 @@ c_headers += files(
 
 c_headers += files(
   'compute.h',
+)
+
+c_headers += files(
+  'file-system.h',
+  'local-file-system.h',
 )
 
 if have_arrow_orc
@@ -125,7 +139,8 @@ cpp_headers = files(
   'chunked-array.hpp',
   'codec.hpp',
   'data-type.hpp',
-  'decimal128.hpp',
+  'datum.hpp',
+  'decimal.hpp',
   'error.hpp',
   'field.hpp',
   'record-batch.hpp',
@@ -147,6 +162,7 @@ cpp_headers += files(
 )
 
 cpp_headers += files(
+  'ipc-options.hpp',
   'metadata-version.hpp',
   'reader.hpp',
   'writer.hpp',
@@ -156,6 +172,11 @@ cpp_headers += files(
   'compute.hpp',
 )
 
+cpp_headers += files(
+  'file-system.hpp',
+  'local-file-system.hpp',
+)
+
 if have_arrow_orc
   cpp_headers += files(
     'orc-file-reader.hpp',
@@ -163,6 +184,7 @@ if have_arrow_orc
 endif
 
 cpp_internal_headers = files(
+  'internal-hash-table.hpp',
   'internal-index.hpp',
 )
 
@@ -192,10 +214,20 @@ headers = c_headers + cpp_headers
 install_headers(headers, subdir: meson.project_name())
 
 
+gobject = dependency('gobject-2.0')
+gobject_libdir = gobject.get_variable(pkgconfig: 'libdir')
+# This is for Homebrew. "pkg-config --cflags gio-2.0" includes the
+# "-I$(xcrun --show-sdk-path)/usr/include" flag by zlib.pc. The
+# include path includes the standard C headers such as stdlib.h. It
+# confuses clang++ (/usr/bin/c++).
+gio = cxx.find_library('gio-2.0', dirs: [gobject_libdir], required: false)
+if not gio.found()
+  gio = dependency('gio-2.0')
+endif
 dependencies = [
   arrow,
-  dependency('gobject-2.0'),
-  dependency('gio-2.0'),
+  gobject,
+  gio,
 ]
 libarrow_glib = library('arrow-glib',
                         sources: sources + enums,
@@ -214,7 +246,7 @@ pkgconfig.generate(libarrow_glib,
                    name: 'Apache Arrow GLib',
                    description: 'C API for Apache Arrow based on GLib',
                    version: version,
-                   requires: ['gio-2.0', 'arrow'])
+                   requires: ['gobject-2.0', 'arrow'])
 if have_arrow_orc
   pkgconfig.generate(filebase: 'arrow-orc-glib',
                      name: 'Apache Arrow GLib ORC',
@@ -223,18 +255,20 @@ if have_arrow_orc
                      requires: ['arrow-glib'])
 endif
 
-arrow_glib_gir = gnome.generate_gir(libarrow_glib,
-                                    sources: sources + c_headers + enums,
-                                    namespace: 'Arrow',
-                                    nsversion: api_version,
-                                    identifier_prefix: 'GArrow',
-                                    symbol_prefix: 'garrow',
-                                    export_packages: 'arrow-glib',
-                                    includes: [
-                                      'GObject-2.0',
-                                      'Gio-2.0',
-                                    ],
-                                    install: true,
-                                    extra_args: [
-                                      '--warn-all',
-                                    ])
+if have_gi
+  arrow_glib_gir = gnome.generate_gir(libarrow_glib,
+                                      sources: sources + c_headers + enums,
+                                      namespace: 'Arrow',
+                                      nsversion: api_version,
+                                      identifier_prefix: 'GArrow',
+                                      symbol_prefix: 'garrow',
+                                      export_packages: 'arrow-glib',
+                                      includes: [
+                                        'GObject-2.0',
+                                        'Gio-2.0',
+                                      ],
+                                      install: true,
+                                      extra_args: [
+                                        '--warn-all',
+                                      ])
+endif

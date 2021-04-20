@@ -20,8 +20,6 @@
 # [Apache Arrow](https://github.com/apache/arrow) in JS
 
 [![npm version](https://img.shields.io/npm/v/apache-arrow.svg)](https://www.npmjs.com/package/apache-arrow)
-[![Build Status](https://travis-ci.org/apache/arrow.svg?branch=master)](https://travis-ci.org/apache/arrow)
-[![Coverage Status](https://coveralls.io/repos/github/apache/arrow/badge.svg)](https://coveralls.io/github/apache/arrow)
 
 Arrow is a set of technologies that enable big data systems to process and transfer data quickly.
 
@@ -43,6 +41,7 @@ Check out our [API documentation][7] to learn more about how to use Apache Arrow
 
 * [Observable: Introduction to Apache Arrow][5]
 * [Observable: Manipulating flat arrays arrow-style][6]
+* [Observable: Rich columnar data tables - Dictionary-encoded strings, 64bit ints, and nested structs][8]
 * [/js/test/unit](https://github.com/apache/arrow/tree/master/js/test/unit) - Unit tests for Table and Vector
 
 ## Cookbook
@@ -121,7 +120,7 @@ const rainfall = Table.new(
 ```js
 import { Table } from "apache-arrow";
 
-const table = await Table.from(fetch(("/simple.arrow")));
+const table = await Table.from(fetch("/simple.arrow"));
 console.log(table.toString());
 
 ```
@@ -223,7 +222,7 @@ The base `apache-arrow` package includes all the compilation targets for conveni
 The targets are also published under the `@apache-arrow` namespace:
 
 ```sh
-npm install apache-arrow # <-- combined es5/UMD, es2015/CommonJS/ESModules/UMD, and TypeScript package
+npm install apache-arrow # <-- combined es2015/UMD + esnext/CommonJS/ESModules/UMD
 npm install @apache-arrow/ts # standalone TypeScript package
 npm install @apache-arrow/es5-cjs # standalone es5/CommonJS package
 npm install @apache-arrow/es5-esm # standalone es5/ESModules package
@@ -251,7 +250,7 @@ Full list of broader Apache Arrow [committers](https://arrow.apache.org/committe
 
 # Powered By Apache Arrow in JS
 
-Full list of broader Apache Arrow [projects & organizations](https://github.com/apache/arrow/blob/master/site/powered_by.md).
+Full list of broader Apache Arrow [projects & organizations](https://arrow.apache.org/powered_by/).
 
 ## Open Source Projects
 
@@ -277,3 +276,4 @@ Full list of broader Apache Arrow [projects & organizations](https://github.com/
 [5]: https://beta.observablehq.com/@theneuralbit/introduction-to-apache-arrow
 [6]: https://beta.observablehq.com/@lmeyerov/manipulating-flat-arrays-arrow-style
 [7]: https://arrow.apache.org/docs/js/
+[8]: https://observablehq.com/@lmeyerov/rich-data-types-in-apache-arrow-js-efficient-data-tables-wit

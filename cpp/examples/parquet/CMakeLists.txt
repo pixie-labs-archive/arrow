@@ -15,22 +15,64 @@
 # specific language governing permissions and limitations
 # under the License.
 
-add_executable(parquet-low-level-example low-level-api/reader-writer.cc)
-add_executable(parquet-low-level-example2 low-level-api/reader-writer2.cc)
-target_include_directories(parquet-low-level-example PRIVATE low-level-api/)
-target_include_directories(parquet-low-level-example2 PRIVATE low-level-api/)
-target_link_libraries(parquet-low-level-example parquet_static)
-target_link_libraries(parquet-low-level-example2 parquet_static)
+add_executable(parquet_low_level_example low_level_api/reader_writer.cc)
+add_executable(parquet_low_level_example2 low_level_api/reader_writer2.cc)
+add_executable(parquet_arrow_example parquet_arrow/reader_writer.cc)
+add_executable(parquet_stream_api_example parquet_stream_api/stream_reader_writer.cc)
+target_include_directories(parquet_low_level_example PRIVATE low_level_api/)
+target_include_directories(parquet_low_level_example2 PRIVATE low_level_api/)
 
-add_executable(parquet-arrow-example parquet-arrow/reader-writer.cc)
+# The variables in these files are for illustration purposes
+set(PARQUET_EXAMPLES_WARNING_SUPPRESSIONS
+  low_level_api/reader_writer.cc
+  low_level_api/reader_writer2.cc)
+
+if (PARQUET_REQUIRE_ENCRYPTION)
+  add_executable(parquet_encryption_example low_level_api/encryption_reader_writer.cc)
+  add_executable(parquet_encryption_example_all_crypto_options low_level_api/encryption_reader_writer_all_crypto_options.cc)
+  target_include_directories(parquet_encryption_example PRIVATE low_level_api/)
+  target_include_directories(parquet_encryption_example_all_crypto_options PRIVATE low_level_api/)
+
+  set(PARQUET_EXAMPLES_WARNING_SUPPRESSIONS
+    ${PARQUET_EXAMPLES_WARNING_SUPPRESSIONS}
+    low_level_api/encryption_reader_writer.cc
+    low_level_api/encryption_reader_writer_all_crypto_options.cc)
+
+endif()
+
+if(UNIX)
+  foreach(FILE ${PARQUET_EXAMPLES_WARNING_SUPPRESSIONS})
+    set_property(SOURCE ${FILE}
+      APPEND_STRING
+      PROPERTY COMPILE_FLAGS "-Wno-unused-variable")
+  endforeach()
+endif()
+
 # Prefer shared linkage but use static if shared build is deactivated
 if (ARROW_BUILD_SHARED)
-  target_link_libraries(parquet-arrow-example parquet_shared)
+  set(PARQUET_EXAMPLE_LINK_LIBS parquet_shared)
 else()
-  target_link_libraries(parquet-arrow-example parquet_static)
+  set(PARQUET_EXAMPLE_LINK_LIBS parquet_static)
+endif()
+
+target_link_libraries(parquet_arrow_example ${PARQUET_EXAMPLE_LINK_LIBS})
+target_link_libraries(parquet_low_level_example ${PARQUET_EXAMPLE_LINK_LIBS})
+target_link_libraries(parquet_low_level_example2 ${PARQUET_EXAMPLE_LINK_LIBS})
+target_link_libraries(parquet_stream_api_example ${PARQUET_EXAMPLE_LINK_LIBS})
+
+if(PARQUET_REQUIRE_ENCRYPTION)
+  target_link_libraries(parquet_encryption_example ${PARQUET_EXAMPLE_LINK_LIBS})
+  target_link_libraries(parquet_encryption_example_all_crypto_options ${PARQUET_EXAMPLE_LINK_LIBS})
 endif()
 
 add_dependencies(parquet
-  parquet-low-level-example
-  parquet-low-level-example2
-  parquet-arrow-example)
+  parquet_low_level_example
+  parquet_low_level_example2
+  parquet_arrow_example
+  parquet_stream_api_example)
+
+if (PARQUET_REQUIRE_ENCRYPTION)
+  add_dependencies(parquet
+    parquet_encryption_example
+    parquet_encryption_example_all_crypto_options)
+endif()

@@ -20,6 +20,7 @@ package org.apache.arrow.vector.types.pojo;
 import static org.apache.arrow.util.Preconditions.checkNotNull;
 import static org.apache.arrow.vector.complex.BaseRepeatedValueVector.DATA_VECTOR_NAME;
 import static org.apache.arrow.vector.types.pojo.ArrowType.getTypeForField;
+import static org.apache.arrow.vector.types.pojo.Schema.convertMetadata;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -37,7 +38,6 @@ import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.TypeLayout;
 import org.apache.arrow.vector.types.pojo.ArrowType.ExtensionType;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -67,6 +67,16 @@ public class Field {
   private final FieldType fieldType;
   private final List<Field> children;
 
+  private Field(
+      String name,
+      boolean nullable,
+      ArrowType type,
+      DictionaryEncoding dictionary,
+      List<Field> children,
+      Map<String, String> metadata) {
+    this(name, new FieldType(nullable, type, dictionary, metadata), children);
+  }
+
   @JsonCreator
   private Field(
       @JsonProperty("name") String name,
@@ -74,8 +84,8 @@ public class Field {
       @JsonProperty("type") ArrowType type,
       @JsonProperty("dictionary") DictionaryEncoding dictionary,
       @JsonProperty("children") List<Field> children,
-      @JsonProperty("metadata") Map<String, String> metadata) {
-    this(name, new FieldType(nullable, type, dictionary, metadata), children);
+      @JsonProperty("metadata") List<Map<String, String>> metadata) {
+    this(name, new FieldType(nullable, type, dictionary, convertMetadata(metadata)), children);
   }
 
   private Field(String name, FieldType fieldType, List<Field> children, TypeLayout typeLayout) {
@@ -85,6 +95,8 @@ public class Field {
   }
 
   /**
+   * Creates a new field.
+   *
    * @deprecated Use FieldType or static constructor instead.
    */
   @Deprecated
@@ -93,6 +105,8 @@ public class Field {
   }
 
   /**
+   * Creates a new field.
+   *
    * @deprecated Use FieldType or static constructor instead.
    */
   @Deprecated
@@ -136,9 +150,10 @@ public class Field {
       ExtensionType extensionType = ExtensionTypeRegistry.lookup(extensionName);
       if (extensionType != null) {
         type = extensionType.deserialize(type, extensionMetadata);
+      } else {
+        // Otherwise, we haven't registered the type
+        logger.info("Unrecognized extension type: {}", extensionName);
       }
-      // Otherwise, we haven't registered the type
-      logger.info("Unrecognized extension type: {}", extensionName);
     }
 
     DictionaryEncoding dictionary = null;
@@ -256,9 +271,15 @@ public class Field {
     return children;
   }
 
-  @JsonInclude(Include.NON_EMPTY)
+  @JsonIgnore
   public Map<String, String> getMetadata() {
     return fieldType.getMetadata();
+  }
+
+  @JsonProperty("metadata")
+  @JsonInclude(Include.NON_EMPTY)
+  List<Map<String, String>> getMetadataForJson() {
+    return convertMetadata(getMetadata());
   }
 
   @Override

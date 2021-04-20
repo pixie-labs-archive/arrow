@@ -19,6 +19,7 @@ package org.apache.arrow.vector;
 
 import static org.apache.arrow.vector.NullCheckingForGet.NULL_CHECKING_ENABLED;
 
+import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.complex.impl.Float8ReaderImpl;
 import org.apache.arrow.vector.complex.reader.FieldReader;
@@ -29,14 +30,12 @@ import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.FieldType;
 import org.apache.arrow.vector.util.TransferPair;
 
-import io.netty.buffer.ArrowBuf;
-
 /**
  * Float8Vector implements a fixed width vector (8 bytes) of
  * double values which could be null. A validity buffer (bit vector) is
  * maintained to track which elements in the vector are null.
  */
-public class Float8Vector extends BaseFixedWidthVector {
+public final class Float8Vector extends BaseFixedWidthVector implements FloatingPointVector {
   public static final byte TYPE_WIDTH = 8;
   private final FieldReader reader;
 
@@ -114,7 +113,7 @@ public class Float8Vector extends BaseFixedWidthVector {
     if (NULL_CHECKING_ENABLED && isSet(index) == 0) {
       throw new IllegalStateException("Value at index is null");
     }
-    return valueBuffer.getDouble(index * TYPE_WIDTH);
+    return valueBuffer.getDouble((long) index * TYPE_WIDTH);
   }
 
   /**
@@ -130,7 +129,7 @@ public class Float8Vector extends BaseFixedWidthVector {
       return;
     }
     holder.isSet = 1;
-    holder.value = valueBuffer.getDouble(index * TYPE_WIDTH);
+    holder.value = valueBuffer.getDouble((long) index * TYPE_WIDTH);
   }
 
   /**
@@ -143,7 +142,7 @@ public class Float8Vector extends BaseFixedWidthVector {
     if (isSet(index) == 0) {
       return null;
     } else {
-      return valueBuffer.getDouble(index * TYPE_WIDTH);
+      return valueBuffer.getDouble((long) index * TYPE_WIDTH);
     }
   }
 
@@ -156,7 +155,7 @@ public class Float8Vector extends BaseFixedWidthVector {
 
 
   private void setValue(int index, double value) {
-    valueBuffer.setDouble(index * TYPE_WIDTH, value);
+    valueBuffer.setDouble((long) index * TYPE_WIDTH, value);
   }
 
   /**
@@ -166,7 +165,7 @@ public class Float8Vector extends BaseFixedWidthVector {
    * @param value   value of element
    */
   public void set(int index, double value) {
-    BitVectorHelper.setValidityBitToOne(validityBuffer, index);
+    BitVectorHelper.setBit(validityBuffer, index);
     setValue(index, value);
   }
 
@@ -182,10 +181,10 @@ public class Float8Vector extends BaseFixedWidthVector {
     if (holder.isSet < 0) {
       throw new IllegalArgumentException();
     } else if (holder.isSet > 0) {
-      BitVectorHelper.setValidityBitToOne(validityBuffer, index);
+      BitVectorHelper.setBit(validityBuffer, index);
       setValue(index, holder.value);
     } else {
-      BitVectorHelper.setValidityBit(validityBuffer, index, 0);
+      BitVectorHelper.unsetBit(validityBuffer, index);
     }
   }
 
@@ -196,7 +195,7 @@ public class Float8Vector extends BaseFixedWidthVector {
    * @param holder  data holder for value of element
    */
   public void set(int index, Float8Holder holder) {
-    BitVectorHelper.setValidityBitToOne(validityBuffer, index);
+    BitVectorHelper.setBit(validityBuffer, index);
     setValue(index, holder.value);
   }
 
@@ -240,18 +239,6 @@ public class Float8Vector extends BaseFixedWidthVector {
   }
 
   /**
-   * Set the element at the given index to null.
-   *
-   * @param index   position of element
-   */
-  public void setNull(int index) {
-    handleSafe(index);
-    // not really needed to set the bit to 0 as long as
-    // the buffer always starts from 0.
-    BitVectorHelper.setValidityBit(validityBuffer, index, 0);
-  }
-
-  /**
    * Store the given value at a particular position in the vector. isSet indicates
    * whether the value is NULL or not.
    *
@@ -263,7 +250,7 @@ public class Float8Vector extends BaseFixedWidthVector {
     if (isSet > 0) {
       set(index, value);
     } else {
-      BitVectorHelper.setValidityBit(validityBuffer, index, 0);
+      BitVectorHelper.unsetBit(validityBuffer, index);
     }
   }
 
@@ -292,9 +279,23 @@ public class Float8Vector extends BaseFixedWidthVector {
    * @return value stored at the index.
    */
   public static double get(final ArrowBuf buffer, final int index) {
-    return buffer.getDouble(index * TYPE_WIDTH);
+    return buffer.getDouble((long) index * TYPE_WIDTH);
   }
 
+  @Override
+  public void setWithPossibleTruncate(int index, double value) {
+    set(index, value);
+  }
+
+  @Override
+  public void setSafeWithPossibleTruncate(int index, double value) {
+    setSafe(index, value);
+  }
+
+  @Override
+  public double getValueAsDouble(int index) {
+    return get(index);
+  }
 
   /*----------------------------------------------------------------*
    |                                                                |
@@ -304,7 +305,7 @@ public class Float8Vector extends BaseFixedWidthVector {
 
 
   /**
-   * Construct a TransferPair comprising of this and and a target vector of
+   * Construct a TransferPair comprising of this and a target vector of
    * the same type.
    *
    * @param ref name of the target vector

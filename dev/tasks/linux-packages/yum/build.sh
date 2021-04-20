@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # -*- sh-indentation: 2; sh-basic-offset: 2 -*-
 #
 # Licensed to the Apache Software Foundation (ASF) under one
@@ -17,6 +17,8 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+
+set -u
 
 run()
 {
@@ -40,27 +42,49 @@ fi
 distribution_version=$(echo ${distribution_version} | sed -e 's/\..*$//g')
 
 architecture="$(arch)"
+lib_directory=/usr/lib64
 case "${architecture}" in
   i*86)
     architecture=i386
+    lib_directory=/usr/lib
     ;;
 esac
 
+run mkdir -p /build
+run cd /build
+find . -not -path ./ccache -a -not -path "./ccache/*" -delete
+if which ccache > /dev/null 2>&1; then
+  export CCACHE_COMPILERCHECK=content
+  export CCACHE_COMPRESS=1
+  export CCACHE_COMPRESSLEVEL=6
+  export CCACHE_MAXSIZE=500M
+  export CCACHE_DIR="${PWD}/ccache"
+  ccache --show-stats
+  if [ -d "${lib_directory}/ccache" ]; then
+    PATH="${lib_directory}/ccache:$PATH"
+  fi
+fi
+
+run mkdir -p rpmbuild
+run cd
+rm -rf rpmbuild
+run ln -fs /build/rpmbuild ./
 if [ -x /usr/bin/rpmdev-setuptree ]; then
   rm -rf .rpmmacros
   run rpmdev-setuptree
 else
-  run cat <<EOM > ~/.rpmmacros
+  run cat <<RPMMACROS > ~/.rpmmacros
 %_topdir ${HOME}/rpmbuild
-EOM
-  run mkdir -p ~/rpmbuild/SOURCES
-  run mkdir -p ~/rpmbuild/SPECS
-  run mkdir -p ~/rpmbuild/BUILD
-  run mkdir -p ~/rpmbuild/RPMS
-  run mkdir -p ~/rpmbuild/SRPMS
+RPMMACROS
+  run mkdir -p rpmbuild/SOURCES
+  run mkdir -p rpmbuild/SPECS
+  run mkdir -p rpmbuild/BUILD
+  run mkdir -p rpmbuild/RPMS
+  run mkdir -p rpmbuild/SRPMS
 fi
 
-repository="/host/repositories/${distribution}/${distribution_version}"
+repositories="/host/repositories"
+repository="${repositories}/${distribution}/${distribution_version}"
 rpm_dir="${repository}/${architecture}/Packages"
 srpm_dir="${repository}/source/SRPMS"
 run mkdir -p "${rpm_dir}" "${srpm_dir}"
@@ -68,19 +92,20 @@ run mkdir -p "${rpm_dir}" "${srpm_dir}"
 # for debug
 # rpmbuild_options="$rpmbuild_options --define 'optflags -O0 -g3'"
 
-cd
-
 if [ -n "${SOURCE_ARCHIVE}" ]; then
   case "${RELEASE}" in
     0.dev*)
-      run tar xf /host/tmp/${SOURCE_ARCHIVE}
+      source_archive_base_name=$( \
+        echo ${SOURCE_ARCHIVE} | sed -e 's/\.tar\.gz$//')
+      run tar xf /host/tmp/${SOURCE_ARCHIVE} \
+        --transform="s,^[^/]*,${PACKAGE},"
       run mv \
-          apache-${PACKAGE}-${VERSION}-$(echo $RELEASE | sed -e 's/^0\.//') \
-          apache-${PACKAGE}-${VERSION}
+          ${PACKAGE} \
+          ${source_archive_base_name}
       run tar czf \
           rpmbuild/SOURCES/${SOURCE_ARCHIVE} \
-          apache-${PACKAGE}-${VERSION}
-      run rm -rf apache-${PACKAGE}-${VERSION}
+          ${source_archive_base_name}
+      run rm -rf ${source_archive_base_name}
       ;;
     *)
       run cp /host/tmp/${SOURCE_ARCHIVE} rpmbuild/SOURCES/
@@ -90,7 +115,7 @@ else
   run cp /host/tmp/${PACKAGE}-${VERSION}.* rpmbuild/SOURCES/
 fi
 run cp \
-    /host/tmp/${distribution}/${PACKAGE}.spec \
+    /host/tmp/${PACKAGE}.spec \
     rpmbuild/SPECS/
 
 run cat <<BUILD > build.sh
@@ -99,7 +124,7 @@ run cat <<BUILD > build.sh
 rpmbuild -ba ${rpmbuild_options} rpmbuild/SPECS/${PACKAGE}.spec
 BUILD
 run chmod +x build.sh
-if [ "${distribution_version}" = 6 ]; then
+if [ -n "${DEVTOOLSET_VERSION:-}" ]; then
   run cat <<WHICH_STRIP > which-strip.sh
 #!/bin/bash
 
@@ -107,12 +132,12 @@ which strip
 WHICH_STRIP
   run chmod +x which-strip.sh
   run cat <<USE_DEVTOOLSET_STRIP >> ~/.rpmmacros
-%__strip $(run scl enable devtoolset-6 ./which-strip.sh)
+%__strip $(run scl enable devtoolset-${DEVTOOLSET_VERSION} ./which-strip.sh)
 USE_DEVTOOLSET_STRIP
   if [ "${DEBUG:-no}" = "yes" ]; then
-    run scl enable devtoolset-6 ./build.sh
+    run scl enable devtoolset-${DEVTOOLSET_VERSION} ./build.sh
   else
-    run scl enable devtoolset-6 ./build.sh > /dev/null
+    run scl enable devtoolset-${DEVTOOLSET_VERSION} ./build.sh > /dev/null
   fi
 else
   if [ "${DEBUG:-no}" = "yes" ]; then
@@ -122,5 +147,11 @@ else
   fi
 fi
 
+if which ccache > /dev/null 2>&1; then
+  ccache --show-stats
+fi
+
 run mv rpmbuild/RPMS/*/* "${rpm_dir}/"
 run mv rpmbuild/SRPMS/* "${srpm_dir}/"
+
+run chown -R "$(stat --format "%u:%g" "${repositories}")" "${repositories}"

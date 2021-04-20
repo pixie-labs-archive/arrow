@@ -22,15 +22,18 @@ import (
 
 	"github.com/apache/arrow/go/arrow"
 	"github.com/apache/arrow/go/arrow/array"
-	"github.com/apache/arrow/go/arrow/internal/bitutil"
+	"github.com/apache/arrow/go/arrow/bitutil"
 	"github.com/apache/arrow/go/arrow/internal/flatbuf"
 	"github.com/apache/arrow/go/arrow/memory"
-	"github.com/pkg/errors"
+	"golang.org/x/xerrors"
 )
 
-type payloadWriter interface {
-	start() error
-	write(payload) error
+// PayloadWriter is an interface for injecting a different payloadwriter
+// allowing more reusability with the Writer object with other scenarios,
+// such as with Flight data
+type PayloadWriter interface {
+	Start() error
+	WritePayload(Payload) error
 	Close() error
 }
 
@@ -43,29 +46,29 @@ type pwriter struct {
 	recs   []fileBlock
 }
 
-func (w *pwriter) start() error {
+func (w *pwriter) Start() error {
 	var err error
 
 	err = w.updatePos()
 	if err != nil {
-		return errors.Wrap(err, "arrow/ipc: could not update position while in start")
+		return xerrors.Errorf("arrow/ipc: could not update position while in start: %w", err)
 	}
 
 	// only necessary to align to 8-byte boundary at the start of the file
 	_, err = w.Write(Magic)
 	if err != nil {
-		return errors.Wrap(err, "arrow/ipc: could not write magic Arrow bytes")
+		return xerrors.Errorf("arrow/ipc: could not write magic Arrow bytes: %w", err)
 	}
 
 	err = w.align(kArrowIPCAlignment)
 	if err != nil {
-		return errors.Wrap(err, "arrow/ipc: could not align start block")
+		return xerrors.Errorf("arrow/ipc: could not align start block: %w", err)
 	}
 
 	return err
 }
 
-func (w *pwriter) write(p payload) error {
+func (w *pwriter) WritePayload(p Payload) error {
 	blk := fileBlock{Offset: w.pos, Meta: 0, Body: p.size}
 	n, err := writeIPCPayload(w, p)
 	if err != nil {
@@ -76,10 +79,10 @@ func (w *pwriter) write(p payload) error {
 
 	err = w.updatePos()
 	if err != nil {
-		return errors.Wrap(err, "arrow/ipc: could not update position while in write-payload")
+		return xerrors.Errorf("arrow/ipc: could not update position while in write-payload: %w", err)
 	}
 
-	switch byte(p.msg) {
+	switch flatbuf.MessageHeader(p.msg) {
 	case flatbuf.MessageHeaderDictionaryBatch:
 		w.dicts = append(w.dicts, blk)
 	case flatbuf.MessageHeaderRecordBatch:
@@ -95,36 +98,36 @@ func (w *pwriter) Close() error {
 	// write file footer
 	err = w.updatePos()
 	if err != nil {
-		return errors.Wrap(err, "arrow/ipc: could not update position while in close")
+		return xerrors.Errorf("arrow/ipc: could not update position while in close: %w", err)
 	}
 
 	pos := w.pos
 	err = writeFileFooter(w.schema, w.dicts, w.recs, w)
 	if err != nil {
-		return errors.Wrap(err, "arrow/ipc: could not write file footer")
+		return xerrors.Errorf("arrow/ipc: could not write file footer: %w", err)
 	}
 
 	// write file footer length
 	err = w.updatePos() // not strictly needed as we passed w to writeFileFooter...
 	if err != nil {
-		return errors.Wrap(err, "arrow/ipc: could not compute file footer length")
+		return xerrors.Errorf("arrow/ipc: could not compute file footer length: %w", err)
 	}
 
 	size := w.pos - pos
 	if size <= 0 {
-		return errors.Errorf("arrow/ipc: invalid file footer size (size=%d)", size)
+		return xerrors.Errorf("arrow/ipc: invalid file footer size (size=%d)", size)
 	}
 
 	buf := make([]byte, 4)
 	binary.LittleEndian.PutUint32(buf, uint32(size))
 	_, err = w.Write(buf)
 	if err != nil {
-		return errors.Wrap(err, "arrow/ipc: could not write file footer size")
+		return xerrors.Errorf("arrow/ipc: could not write file footer size: %w", err)
 	}
 
 	_, err = w.Write(Magic)
 	if err != nil {
-		return errors.Wrap(err, "arrow/ipc: could not write Arrow magic bytes")
+		return xerrors.Errorf("arrow/ipc: could not write Arrow magic bytes: %w", err)
 	}
 
 	return nil
@@ -152,7 +155,7 @@ func (w *pwriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-func writeIPCPayload(w io.Writer, p payload) (int, error) {
+func writeIPCPayload(w io.Writer, p Payload) (int, error) {
 	n, err := writeMessage(p.meta, kArrowIPCAlignment, w)
 	if err != nil {
 		return n, err
@@ -174,14 +177,14 @@ func writeIPCPayload(w io.Writer, p payload) (int, error) {
 		if size > 0 {
 			_, err = w.Write(buf.Bytes())
 			if err != nil {
-				return n, errors.Wrap(err, "arrow/ipc: could not write payload message body")
+				return n, xerrors.Errorf("arrow/ipc: could not write payload message body: %w", err)
 			}
 		}
 
 		if padding > 0 {
 			_, err = w.Write(paddingBytes[:padding])
 			if err != nil {
-				return n, errors.Wrap(err, "arrow/ipc: could not write payload message padding")
+				return n, xerrors.Errorf("arrow/ipc: could not write payload message padding: %w", err)
 			}
 		}
 	}
@@ -189,14 +192,50 @@ func writeIPCPayload(w io.Writer, p payload) (int, error) {
 	return n, err
 }
 
-type payload struct {
+// Payload is the underlying message object which is passed to the payload writer
+// for actually writing out ipc messages
+type Payload struct {
 	msg  MessageType
 	meta *memory.Buffer
 	body []*memory.Buffer
 	size int64 // length of body
 }
 
-func (p *payload) Release() {
+// Meta returns the buffer containing the metadata for this payload,
+// callers must call Release on the buffer
+func (p *Payload) Meta() *memory.Buffer {
+	if p.meta != nil {
+		p.meta.Retain()
+	}
+	return p.meta
+}
+
+// SerializeBody serializes the body buffers and writes them to the provided
+// writer.
+func (p *Payload) SerializeBody(w io.Writer) error {
+	for _, data := range p.body {
+		if data == nil {
+			continue
+		}
+
+		size := int64(data.Len())
+		padding := bitutil.CeilByte64(size) - size
+		if size > 0 {
+			if _, err := w.Write(data.Bytes()); err != nil {
+				return xerrors.Errorf("arrow/ipc: could not write payload message body: %w", err)
+			}
+
+			if padding > 0 {
+				if _, err := w.Write(paddingBytes[:padding]); err != nil {
+					return xerrors.Errorf("arrow/ipc: could not write payload message padding bytes: %w", err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (p *Payload) Release() {
 	if p.meta != nil {
 		p.meta.Release()
 		p.meta = nil
@@ -210,7 +249,7 @@ func (p *payload) Release() {
 	}
 }
 
-type payloads []payload
+type payloads []Payload
 
 func (ps payloads) Release() {
 	for i := range ps {
@@ -233,9 +272,11 @@ type FileWriter struct {
 		written bool
 	}
 
-	pw payloadWriter
+	pw PayloadWriter
 
-	schema *arrow.Schema
+	schema     *arrow.Schema
+	codec      flatbuf.CompressionType
+	compressNP int
 }
 
 // NewFileWriter opens an Arrow file using the provided writer w.
@@ -246,15 +287,17 @@ func NewFileWriter(w io.WriteSeeker, opts ...Option) (*FileWriter, error) {
 	)
 
 	f := FileWriter{
-		w:      w,
-		pw:     &pwriter{w: w, schema: cfg.schema, pos: -1},
-		mem:    cfg.alloc,
-		schema: cfg.schema,
+		w:          w,
+		pw:         &pwriter{w: w, schema: cfg.schema, pos: -1},
+		mem:        cfg.alloc,
+		schema:     cfg.schema,
+		codec:      cfg.codec,
+		compressNP: cfg.compressNP,
 	}
 
 	pos, err := f.w.Seek(0, io.SeekCurrent)
 	if err != nil {
-		return nil, errors.Errorf("arrow/ipc: could not seek current position: %v", err)
+		return nil, xerrors.Errorf("arrow/ipc: could not seek current position: %w", err)
 	}
 	f.header.offset = pos
 
@@ -264,7 +307,7 @@ func NewFileWriter(w io.WriteSeeker, opts ...Option) (*FileWriter, error) {
 func (f *FileWriter) Close() error {
 	err := f.checkStarted()
 	if err != nil {
-		return errors.Wrap(err, "arrow/ipc: could not write empty file")
+		return xerrors.Errorf("arrow/ipc: could not write empty file: %w", err)
 	}
 
 	if f.footer.written {
@@ -273,7 +316,7 @@ func (f *FileWriter) Close() error {
 
 	err = f.pw.Close()
 	if err != nil {
-		return errors.Wrap(err, "arrow/ipc: could not close payload writer")
+		return xerrors.Errorf("arrow/ipc: could not close payload writer: %w", err)
 	}
 	f.footer.written = true
 
@@ -287,21 +330,21 @@ func (f *FileWriter) Write(rec array.Record) error {
 	}
 
 	if err := f.checkStarted(); err != nil {
-		return errors.Wrap(err, "arrow/ipc: could not write header")
+		return xerrors.Errorf("arrow/ipc: could not write header: %w", err)
 	}
 
 	const allow64b = true
 	var (
-		data = payload{msg: MessageRecordBatch}
-		enc  = newRecordEncoder(f.mem, 0, kMaxNestingDepth, allow64b)
+		data = Payload{msg: MessageRecordBatch}
+		enc  = newRecordEncoder(f.mem, 0, kMaxNestingDepth, allow64b, f.codec, f.compressNP)
 	)
 	defer data.Release()
 
 	if err := enc.Encode(&data, rec); err != nil {
-		return errors.Wrap(err, "arrow/ipc: could not encode record to payload")
+		return xerrors.Errorf("arrow/ipc: could not encode record to payload: %w", err)
 	}
 
-	return f.pw.write(data)
+	return f.pw.WritePayload(data)
 }
 
 func (f *FileWriter) checkStarted() error {
@@ -313,7 +356,7 @@ func (f *FileWriter) checkStarted() error {
 
 func (f *FileWriter) start() error {
 	f.header.started = true
-	err := f.pw.start()
+	err := f.pw.Start()
 	if err != nil {
 		return err
 	}
@@ -323,7 +366,7 @@ func (f *FileWriter) start() error {
 	defer ps.Release()
 
 	for _, data := range ps {
-		err = f.pw.write(data)
+		err = f.pw.WritePayload(data)
 		if err != nil {
 			return err
 		}

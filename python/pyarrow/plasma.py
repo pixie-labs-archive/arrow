@@ -15,7 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-from __future__ import absolute_import
 
 import contextlib
 import os
@@ -26,9 +25,9 @@ import sys
 import tempfile
 import time
 
-from pyarrow._plasma import (ObjectID, ObjectNotAvailable, # noqa
+from pyarrow._plasma import (ObjectID, ObjectNotAvailable,  # noqa
                              PlasmaBuffer, PlasmaClient, connect,
-                             PlasmaObjectExists, PlasmaObjectNonexistent,
+                             PlasmaObjectExists, PlasmaObjectNotFound,
                              PlasmaStoreFull)
 
 
@@ -106,7 +105,11 @@ def start_plasma_store(plasma_store_memory,
     try:
         plasma_store_name = os.path.join(tmpdir, 'plasma.sock')
         plasma_store_executable = os.path.join(
-            pa.__path__[0], "plasma_store_server")
+            pa.__path__[0], "plasma-store-server")
+        if not os.path.exists(plasma_store_executable):
+            # Fallback to sys.prefix/bin/ (conda)
+            plasma_store_executable = os.path.join(
+                sys.prefix, "bin", "plasma-store-server")
         command = [plasma_store_executable,
                    "-s", plasma_store_name,
                    "-m", str(plasma_store_memory)]

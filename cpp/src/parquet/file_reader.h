@@ -15,15 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#ifndef PARQUET_FILE_READER_H
-#define PARQUET_FILE_READER_H
+#pragma once
 
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "parquet/metadata.h"  // IWYU pragma:: keep
+#include "arrow/io/caching.h"
+#include "arrow/util/type_fwd.h"
+#include "parquet/metadata.h"  // IWYU pragma: keep
 #include "parquet/platform.h"
 #include "parquet/properties.h"
 
@@ -32,7 +33,6 @@ namespace parquet {
 class ColumnReader;
 class FileMetaData;
 class PageReader;
-class RandomAccessSource;
 class RowGroupMetaData;
 
 class PARQUET_EXPORT RowGroupReader {
@@ -70,9 +70,9 @@ class PARQUET_EXPORT ParquetFileReader {
   // An implementation of the Contents class is defined in the .cc file
   struct PARQUET_EXPORT Contents {
     static std::unique_ptr<Contents> Open(
-        const std::shared_ptr<::arrow::io::RandomAccessFile>& source,
+        std::shared_ptr<::arrow::io::RandomAccessFile> source,
         const ReaderProperties& props = default_reader_properties(),
-        const std::shared_ptr<FileMetaData>& metadata = NULLPTR);
+        std::shared_ptr<FileMetaData> metadata = NULLPTR);
 
     virtual ~Contents() = default;
     // Perform any cleanup associated with the file contents
@@ -84,30 +84,19 @@ class PARQUET_EXPORT ParquetFileReader {
   ParquetFileReader();
   ~ParquetFileReader();
 
-  // Create a reader from some implementation of parquet-cpp's generic file
-  // input interface
-  //
-  // If you cannot provide exclusive access to your file resource, create a
-  // subclass of RandomAccessSource that wraps the shared resource
-  ARROW_DEPRECATED("Use arrow::io::RandomAccessFile version")
-  static std::unique_ptr<ParquetFileReader> Open(
-      std::unique_ptr<RandomAccessSource> source,
-      const ReaderProperties& props = default_reader_properties(),
-      const std::shared_ptr<FileMetaData>& metadata = NULLPTR);
-
   // Create a file reader instance from an Arrow file object. Thread-safety is
   // the responsibility of the file implementation
   static std::unique_ptr<ParquetFileReader> Open(
-      const std::shared_ptr<::arrow::io::RandomAccessFile>& source,
+      std::shared_ptr<::arrow::io::RandomAccessFile> source,
       const ReaderProperties& props = default_reader_properties(),
-      const std::shared_ptr<FileMetaData>& metadata = NULLPTR);
+      std::shared_ptr<FileMetaData> metadata = NULLPTR);
 
   // API Convenience to open a serialized Parquet file on disk, using Arrow IO
   // interfaces.
   static std::unique_ptr<ParquetFileReader> OpenFile(
       const std::string& path, bool memory_map = true,
       const ReaderProperties& props = default_reader_properties(),
-      const std::shared_ptr<FileMetaData>& metadata = NULLPTR);
+      std::shared_ptr<FileMetaData> metadata = NULLPTR);
 
   void Open(std::unique_ptr<Contents> contents);
   void Close();
@@ -117,6 +106,29 @@ class PARQUET_EXPORT ParquetFileReader {
 
   // Returns the file metadata. Only one instance is ever created
   std::shared_ptr<FileMetaData> metadata() const;
+
+  /// Pre-buffer the specified column indices in all row groups.
+  ///
+  /// Readers can optionally call this to cache the necessary slices
+  /// of the file in-memory before deserialization. Arrow readers can
+  /// automatically do this via an option. This is intended to
+  /// increase performance when reading from high-latency filesystems
+  /// (e.g. Amazon S3).
+  ///
+  /// After calling this, creating readers for row groups/column
+  /// indices that were not buffered may fail. Creating multiple
+  /// readers for the a subset of the buffered regions is
+  /// acceptable. This may be called again to buffer a different set
+  /// of row groups/columns.
+  ///
+  /// If memory usage is a concern, note that data will remain
+  /// buffered in memory until either \a PreBuffer() is called again,
+  /// or the reader itself is destructed. Reading - and buffering -
+  /// only one row group at a time may be useful.
+  ::arrow::Future<> PreBuffer(const std::vector<int>& row_groups,
+                              const std::vector<int>& column_indices,
+                              const ::arrow::io::IOContext& ctx,
+                              const ::arrow::io::CacheOptions& options);
 
  private:
   // Holds a pointer to an instance of Contents implementation
@@ -137,5 +149,3 @@ int64_t ScanFileContents(std::vector<int> columns, const int32_t column_batch_si
                          ParquetFileReader* reader);
 
 }  // namespace parquet
-
-#endif  // PARQUET_FILE_READER_H

@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#ifndef GANDIVA_TYPES_H
-#define GANDIVA_TYPES_H
+#pragma once
 
 #include <memory>
 #include <vector>
@@ -32,7 +31,7 @@ class NativeFunction;
 class FunctionRegistry;
 /// \brief Exports types supported by Gandiva for processing.
 ///
-/// Has helper methods for clients to programatically discover
+/// Has helper methods for clients to programmatically discover
 /// data types and functions supported by Gandiva.
 class GANDIVA_EXPORT ExpressionRegistry {
  public:
@@ -63,8 +62,6 @@ class GANDIVA_EXPORT ExpressionRegistry {
 
  private:
   static DataTypeVector supported_types_;
-  static DataTypeVector InitSupportedTypes();
-  static void AddArrowTypesToVector(arrow::Type::type& type, DataTypeVector& vector);
   std::unique_ptr<FunctionRegistry> function_registry_;
 };
 
@@ -72,4 +69,3 @@ GANDIVA_EXPORT
 std::vector<std::shared_ptr<FunctionSignature>> GetRegisteredFunctionSignatures();
 
 }  // namespace gandiva
-#endif  // GANDIVA_TYPES_H

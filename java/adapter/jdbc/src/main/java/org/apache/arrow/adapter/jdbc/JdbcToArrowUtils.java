@@ -17,24 +17,13 @@
 
 package org.apache.arrow.adapter.jdbc;
 
-import static org.apache.arrow.vector.types.FloatingPointPrecision.DOUBLE;
-import static org.apache.arrow.vector.types.FloatingPointPrecision.SINGLE;
-
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
-import java.sql.Array;
-import java.sql.Blob;
-import java.sql.Clob;
 import java.sql.Date;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Time;
 import java.sql.Timestamp;
-import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.HashMap;
@@ -43,48 +32,49 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.TimeZone;
 
+import org.apache.arrow.adapter.jdbc.consumer.ArrayConsumer;
+import org.apache.arrow.adapter.jdbc.consumer.BigIntConsumer;
+import org.apache.arrow.adapter.jdbc.consumer.BinaryConsumer;
+import org.apache.arrow.adapter.jdbc.consumer.BitConsumer;
+import org.apache.arrow.adapter.jdbc.consumer.CompositeJdbcConsumer;
+import org.apache.arrow.adapter.jdbc.consumer.DateConsumer;
+import org.apache.arrow.adapter.jdbc.consumer.DecimalConsumer;
+import org.apache.arrow.adapter.jdbc.consumer.DoubleConsumer;
+import org.apache.arrow.adapter.jdbc.consumer.FloatConsumer;
+import org.apache.arrow.adapter.jdbc.consumer.IntConsumer;
+import org.apache.arrow.adapter.jdbc.consumer.JdbcConsumer;
+import org.apache.arrow.adapter.jdbc.consumer.NullConsumer;
+import org.apache.arrow.adapter.jdbc.consumer.SmallIntConsumer;
+import org.apache.arrow.adapter.jdbc.consumer.TimeConsumer;
+import org.apache.arrow.adapter.jdbc.consumer.TimestampConsumer;
+import org.apache.arrow.adapter.jdbc.consumer.TimestampTZConsumer;
+import org.apache.arrow.adapter.jdbc.consumer.TinyIntConsumer;
+import org.apache.arrow.adapter.jdbc.consumer.VarCharConsumer;
 import org.apache.arrow.memory.RootAllocator;
-import org.apache.arrow.vector.BaseFixedWidthVector;
+import org.apache.arrow.util.Preconditions;
 import org.apache.arrow.vector.BigIntVector;
 import org.apache.arrow.vector.BitVector;
-import org.apache.arrow.vector.DateMilliVector;
+import org.apache.arrow.vector.DateDayVector;
 import org.apache.arrow.vector.DecimalVector;
 import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.Float4Vector;
 import org.apache.arrow.vector.Float8Vector;
 import org.apache.arrow.vector.IntVector;
+import org.apache.arrow.vector.NullVector;
 import org.apache.arrow.vector.SmallIntVector;
 import org.apache.arrow.vector.TimeMilliVector;
-import org.apache.arrow.vector.TimeStampVector;
+import org.apache.arrow.vector.TimeStampMilliTZVector;
+import org.apache.arrow.vector.TimeStampMilliVector;
 import org.apache.arrow.vector.TinyIntVector;
 import org.apache.arrow.vector.VarBinaryVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.complex.ListVector;
-import org.apache.arrow.vector.holders.NullableBigIntHolder;
-import org.apache.arrow.vector.holders.NullableBitHolder;
-import org.apache.arrow.vector.holders.NullableDateMilliHolder;
-import org.apache.arrow.vector.holders.NullableDecimalHolder;
-import org.apache.arrow.vector.holders.NullableFloat4Holder;
-import org.apache.arrow.vector.holders.NullableFloat8Holder;
-import org.apache.arrow.vector.holders.NullableIntHolder;
-import org.apache.arrow.vector.holders.NullableSmallIntHolder;
-import org.apache.arrow.vector.holders.NullableTimeMilliHolder;
-import org.apache.arrow.vector.holders.NullableTinyIntHolder;
-import org.apache.arrow.vector.holders.NullableVarCharHolder;
-import org.apache.arrow.vector.holders.VarBinaryHolder;
-import org.apache.arrow.vector.holders.VarCharHolder;
-import org.apache.arrow.vector.types.DateUnit;
-import org.apache.arrow.vector.types.TimeUnit;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.FieldType;
 import org.apache.arrow.vector.types.pojo.Schema;
-import org.apache.arrow.vector.util.DecimalUtility;
-
-import com.google.common.base.Preconditions;
-
-import io.netty.buffer.ArrowBuf;
+import org.apache.arrow.vector.util.ValueVectorUtility;
 
 /**
  * Class that does most of the work to convert JDBC ResultSet data into Arrow columnar format Vector objects.
@@ -92,10 +82,6 @@ import io.netty.buffer.ArrowBuf;
  * @since 0.10.0
  */
 public class JdbcToArrowUtils {
-
-  private static final int DEFAULT_BUFFER_SIZE = 256;
-  private static final int DEFAULT_STREAM_BUFFER_SIZE = 1024;
-  private static final int DEFAULT_CLOB_SUBSTRING_READ_SIZE = 256;
 
   private static final int JDBC_ARRAY_VALUE_COLUMN = 2;
 
@@ -115,7 +101,6 @@ public class JdbcToArrowUtils {
    * @throws SQLException on error
    */
   public static Schema jdbcToArrowSchema(ResultSetMetaData rsmd, Calendar calendar) throws SQLException {
-    Preconditions.checkNotNull(rsmd, "JDBC ResultSetMetaData object can't be null");
     Preconditions.checkNotNull(calendar, "Calendar object can't be null");
 
     return jdbcToArrowSchema(rsmd, new JdbcToArrowConfig(new RootAllocator(0), calendar));
@@ -123,10 +108,7 @@ public class JdbcToArrowUtils {
 
   /**
    * Create Arrow {@link Schema} object for the given JDBC {@link java.sql.ResultSetMetaData}.
-   * <p>
-   * The {@link JdbcToArrowUtils#getArrowTypeForJdbcField(JdbcFieldInfo, Calendar)} method is used to construct a
-   * {@link org.apache.arrow.vector.types.pojo.ArrowType} for each field in the {@link java.sql.ResultSetMetaData}.
-   * </p>
+   *
    * <p>
    * If {@link JdbcToArrowConfig#shouldIncludeMetadata()} returns <code>true</code>, the following fields
    * will be added to the {@link FieldType#getMetadata()}:
@@ -171,7 +153,7 @@ public class JdbcToArrowUtils {
         metadata = null;
       }
 
-      final ArrowType arrowType = getArrowTypeForJdbcField(new JdbcFieldInfo(rsmd, i), config.getCalendar());
+      final ArrowType arrowType = config.getJdbcToArrowTypeConverter().apply(new JdbcFieldInfo(rsmd, i));
       if (arrowType != null) {
         final FieldType fieldType = new FieldType(true, arrowType, /* dictionary encoding */ null, metadata);
 
@@ -182,8 +164,7 @@ public class JdbcToArrowUtils {
             throw new IllegalArgumentException("Configuration does not provide a mapping for array column " + i);
           }
           children = new ArrayList<Field>();
-          final ArrowType childType =
-              getArrowTypeForJdbcField(arrayFieldInfo, config.getCalendar());
+          final ArrowType childType = config.getJdbcToArrowTypeConverter().apply(arrayFieldInfo);
           children.add(new Field("child", FieldType.nullable(childType), null));
         }
 
@@ -192,104 +173,6 @@ public class JdbcToArrowUtils {
     }
 
     return new Schema(fields, null);
-  }
-
-  /**
-   * Creates an {@link org.apache.arrow.vector.types.pojo.ArrowType}
-   * from the {@link JdbcFieldInfo} and {@link java.util.Calendar}.
-   *
-   * <p>This method currently performs following type mapping for JDBC SQL data types to corresponding Arrow data types.
-   *
-   * <ul>
-   *   <li>CHAR --> ArrowType.Utf8</li>
-   *   <li>NCHAR --> ArrowType.Utf8</li>
-   *   <li>VARCHAR --> ArrowType.Utf8</li>
-   *   <li>NVARCHAR --> ArrowType.Utf8</li>
-   *   <li>LONGVARCHAR --> ArrowType.Utf8</li>
-   *   <li>LONGNVARCHAR --> ArrowType.Utf8</li>
-   *   <li>NUMERIC --> ArrowType.Decimal(precision, scale)</li>
-   *   <li>DECIMAL --> ArrowType.Decimal(precision, scale)</li>
-   *   <li>BIT --> ArrowType.Bool</li>
-   *   <li>TINYINT --> ArrowType.Int(8, signed)</li>
-   *   <li>SMALLINT --> ArrowType.Int(16, signed)</li>
-   *   <li>INTEGER --> ArrowType.Int(32, signed)</li>
-   *   <li>BIGINT --> ArrowType.Int(64, signed)</li>
-   *   <li>REAL --> ArrowType.FloatingPoint(FloatingPointPrecision.SINGLE)</li>
-   *   <li>FLOAT --> ArrowType.FloatingPoint(FloatingPointPrecision.SINGLE)</li>
-   *   <li>DOUBLE --> ArrowType.FloatingPoint(FloatingPointPrecision.DOUBLE)</li>
-   *   <li>BINARY --> ArrowType.Binary</li>
-   *   <li>VARBINARY --> ArrowType.Binary</li>
-   *   <li>LONGVARBINARY --> ArrowType.Binary</li>
-   *   <li>DATE --> ArrowType.Date(DateUnit.MILLISECOND)</li>
-   *   <li>TIME --> ArrowType.Time(TimeUnit.MILLISECOND, 32)</li>
-   *   <li>TIMESTAMP --> ArrowType.Timestamp(TimeUnit.MILLISECOND, calendar timezone)</li>
-   *   <li>CLOB --> ArrowType.Utf8</li>
-   *   <li>BLOB --> ArrowType.Binary</li>
-   * </ul>
-   *
-   * @param fieldInfo The field information to construct the <code>ArrowType</code> from.
-   * @param calendar The calendar to use when constructing the <code>ArrowType.Timestamp</code>
-   *                 for {@link java.sql.Types#TIMESTAMP} types.
-   * @return The corresponding <code>ArrowType</code>.
-   * @throws NullPointerException if either <code>fieldInfo</code> or <code>calendar</code> are <code>null</code>.
-   */
-  public static ArrowType getArrowTypeForJdbcField(JdbcFieldInfo fieldInfo, Calendar calendar) {
-    Preconditions.checkNotNull(fieldInfo, "JdbcFieldInfo object cannot be null");
-
-    final String timezone;
-    if (calendar != null) {
-      timezone = calendar.getTimeZone().getID();
-    } else {
-      timezone = null;
-    }
-
-    switch (fieldInfo.getJdbcType()) {
-      case Types.BOOLEAN:
-      case Types.BIT:
-        return new ArrowType.Bool();
-      case Types.TINYINT:
-        return new ArrowType.Int(8, true);
-      case Types.SMALLINT:
-        return new ArrowType.Int(16, true);
-      case Types.INTEGER:
-        return new ArrowType.Int(32, true);
-      case Types.BIGINT:
-        return new ArrowType.Int(64, true);
-      case Types.NUMERIC:
-      case Types.DECIMAL:
-        int precision = fieldInfo.getPrecision();
-        int scale = fieldInfo.getScale();
-        return new ArrowType.Decimal(precision, scale);
-      case Types.REAL:
-      case Types.FLOAT:
-        return new ArrowType.FloatingPoint(SINGLE);
-      case Types.DOUBLE:
-        return new ArrowType.FloatingPoint(DOUBLE);
-      case Types.CHAR:
-      case Types.NCHAR:
-      case Types.VARCHAR:
-      case Types.NVARCHAR:
-      case Types.LONGVARCHAR:
-      case Types.LONGNVARCHAR:
-      case Types.CLOB:
-        return new ArrowType.Utf8();
-      case Types.DATE:
-        return new ArrowType.Date(DateUnit.MILLISECOND);
-      case Types.TIME:
-        return new ArrowType.Time(TimeUnit.MILLISECOND, 32);
-      case Types.TIMESTAMP:
-        return new ArrowType.Timestamp(TimeUnit.MILLISECOND, timezone);
-      case Types.BINARY:
-      case Types.VARBINARY:
-      case Types.LONGVARBINARY:
-      case Types.BLOB:
-        return new ArrowType.Binary();
-      case Types.ARRAY:
-        return new ArrowType.List();
-      default:
-        // no-op, shouldn't get here
-        return null;
-    }
   }
 
   /* Uses the configuration to determine what the array sub-type JdbcFieldInfo is.
@@ -317,18 +200,6 @@ public class JdbcToArrowUtils {
     return fieldInfo;
   }
 
-  private static void allocateVectors(VectorSchemaRoot root, int size) {
-    List<FieldVector> vectors = root.getFieldVectors();
-    for (FieldVector fieldVector : vectors) {
-      if (fieldVector instanceof BaseFixedWidthVector) {
-        ((BaseFixedWidthVector) fieldVector).allocateNew(size);
-      } else {
-        fieldVector.allocateNew();
-      }
-      fieldVector.setInitialCapacity(size);
-    }
-  }
-
   /**
    * Iterate the given JDBC {@link ResultSet} object to fetch the data and transpose it to populate
    * the given Arrow Vector objects.
@@ -342,11 +213,15 @@ public class JdbcToArrowUtils {
   public static void jdbcToArrowVectors(ResultSet rs, VectorSchemaRoot root, Calendar calendar)
       throws SQLException, IOException {
 
-    Preconditions.checkNotNull(rs, "JDBC ResultSet object can't be null");
-    Preconditions.checkNotNull(root, "Vector Schema cannot be null");
     Preconditions.checkNotNull(calendar, "Calendar object can't be null");
 
     jdbcToArrowVectors(rs, root, new JdbcToArrowConfig(new RootAllocator(0), calendar));
+  }
+
+  static boolean isColumnNullable(ResultSet resultSet, int index) throws SQLException {
+    int nullableValue = resultSet.getMetaData().isNullable(index);
+    return nullableValue == ResultSetMetaData.columnNullable ||
+        nullableValue == ResultSetMetaData.columnNullableUnknown;
   }
 
   /**
@@ -361,379 +236,101 @@ public class JdbcToArrowUtils {
   public static void jdbcToArrowVectors(ResultSet rs, VectorSchemaRoot root, JdbcToArrowConfig config)
       throws SQLException, IOException {
 
-    Preconditions.checkNotNull(rs, "JDBC ResultSet object can't be null");
-    Preconditions.checkNotNull(root, "VectorSchemaRoot object can't be null");
-    Preconditions.checkNotNull(config, "JDBC-to-Arrow configuration cannot be null");
-
     ResultSetMetaData rsmd = rs.getMetaData();
     int columnCount = rsmd.getColumnCount();
 
-    allocateVectors(root, DEFAULT_BUFFER_SIZE);
-
-    int rowCount = 0;
-    while (rs.next()) {
-      for (int i = 1; i <= columnCount; i++) {
-        jdbcToFieldVector(
-            rs,
-            i,
-            rs.getMetaData().getColumnType(i),
-            rowCount,
-            root.getVector(rsmd.getColumnName(i)),
-            config);
-      }
-      rowCount++;
+    JdbcConsumer[] consumers = new JdbcConsumer[columnCount];
+    for (int i = 1; i <= columnCount; i++) {
+      FieldVector vector = root.getVector(rsmd.getColumnName(i));
+      consumers[i - 1] = getConsumer(vector.getField().getType(), i, isColumnNullable(rs, i), vector, config);
     }
-    root.setRowCount(rowCount);
+
+    CompositeJdbcConsumer compositeConsumer = null;
+    // Only clean resources when occurs error,
+    // vectors within consumers are useful and users are responsible for its close.
+    try {
+      compositeConsumer = new CompositeJdbcConsumer(consumers);
+      int readRowCount = 0;
+      if (config.getTargetBatchSize() == JdbcToArrowConfig.NO_LIMIT_BATCH_SIZE) {
+        while (rs.next()) {
+          ValueVectorUtility.ensureCapacity(root, readRowCount + 1);
+          compositeConsumer.consume(rs);
+          readRowCount++;
+        }
+      } else {
+        while (rs.next() && readRowCount < config.getTargetBatchSize()) {
+          compositeConsumer.consume(rs);
+          readRowCount++;
+        }
+      }
+
+      root.setRowCount(readRowCount);
+    } catch (Exception e) {
+      // error occurs and clean up resources.
+      if (compositeConsumer != null) {
+        compositeConsumer.close();
+      }
+      throw e;
+    }
   }
 
-  private static void jdbcToFieldVector(
-      ResultSet rs,
-      int columnIndex,
-      int jdbcColType,
-      int rowCount,
-      FieldVector vector,
-      JdbcToArrowConfig config)
-          throws SQLException, IOException {
-
+  static JdbcConsumer getConsumer(ArrowType arrowType, int columnIndex, boolean nullable,
+      FieldVector vector, JdbcToArrowConfig config) {
     final Calendar calendar = config.getCalendar();
 
-    switch (jdbcColType) {
-      case Types.BOOLEAN:
-      case Types.BIT:
-        updateVector((BitVector) vector,
-                rs.getBoolean(columnIndex), !rs.wasNull(), rowCount);
-        break;
-      case Types.TINYINT:
-        updateVector((TinyIntVector) vector,
-                rs.getInt(columnIndex), !rs.wasNull(), rowCount);
-        break;
-      case Types.SMALLINT:
-        updateVector((SmallIntVector) vector,
-                rs.getInt(columnIndex), !rs.wasNull(), rowCount);
-        break;
-      case Types.INTEGER:
-        updateVector((IntVector) vector,
-                rs.getInt(columnIndex), !rs.wasNull(), rowCount);
-        break;
-      case Types.BIGINT:
-        updateVector((BigIntVector) vector,
-                rs.getLong(columnIndex), !rs.wasNull(), rowCount);
-        break;
-      case Types.NUMERIC:
-      case Types.DECIMAL:
-        updateVector((DecimalVector) vector,
-                rs.getBigDecimal(columnIndex), !rs.wasNull(), rowCount);
-        break;
-      case Types.REAL:
-      case Types.FLOAT:
-        updateVector((Float4Vector) vector,
-                rs.getFloat(columnIndex), !rs.wasNull(), rowCount);
-        break;
-      case Types.DOUBLE:
-        updateVector((Float8Vector) vector,
-                rs.getDouble(columnIndex), !rs.wasNull(), rowCount);
-        break;
-      case Types.CHAR:
-      case Types.NCHAR:
-      case Types.VARCHAR:
-      case Types.NVARCHAR:
-      case Types.LONGVARCHAR:
-      case Types.LONGNVARCHAR:
-        updateVector((VarCharVector) vector,
-                rs.getString(columnIndex), !rs.wasNull(), rowCount);
-        break;
-      case Types.DATE:
-        final Date date;
-        if (calendar != null) {
-          date = rs.getDate(columnIndex, calendar);
-        } else {
-          date = rs.getDate(columnIndex);
+    switch (arrowType.getTypeID()) {
+      case Bool:
+        return BitConsumer.createConsumer((BitVector) vector, columnIndex, nullable);
+      case Int:
+        switch (((ArrowType.Int) arrowType).getBitWidth()) {
+          case 8:
+            return TinyIntConsumer.createConsumer((TinyIntVector) vector, columnIndex, nullable);
+          case 16:
+            return SmallIntConsumer.createConsumer((SmallIntVector) vector, columnIndex, nullable);
+          case 32:
+            return IntConsumer.createConsumer((IntVector) vector, columnIndex, nullable);
+          case 64:
+            return BigIntConsumer.createConsumer((BigIntVector) vector, columnIndex, nullable);
+          default:
+            return null;
         }
-
-        updateVector((DateMilliVector) vector, date, !rs.wasNull(), rowCount);
-        break;
-      case Types.TIME:
-        final Time time;
-        if (calendar != null) {
-          time = rs.getTime(columnIndex, calendar);
-        } else {
-          time = rs.getTime(columnIndex);
+      case Decimal:
+        return DecimalConsumer.createConsumer((DecimalVector) vector, columnIndex, nullable);
+      case FloatingPoint:
+        switch (((ArrowType.FloatingPoint) arrowType).getPrecision()) {
+          case SINGLE:
+            return FloatConsumer.createConsumer((Float4Vector) vector, columnIndex, nullable);
+          case DOUBLE:
+            return DoubleConsumer.createConsumer((Float8Vector) vector, columnIndex, nullable);
+          default:
+            return null;
         }
-
-        updateVector((TimeMilliVector) vector, time, !rs.wasNull(), rowCount);
-        break;
-      case Types.TIMESTAMP:
-        final Timestamp ts;
-        if (calendar != null) {
-          ts = rs.getTimestamp(columnIndex, calendar);
+      case Utf8:
+      case LargeUtf8:
+        return VarCharConsumer.createConsumer((VarCharVector) vector, columnIndex, nullable);
+      case Binary:
+      case LargeBinary:
+        return BinaryConsumer.createConsumer((VarBinaryVector) vector, columnIndex, nullable);
+      case Date:
+        return DateConsumer.createConsumer((DateDayVector) vector, columnIndex, nullable, calendar);
+      case Time:
+        return TimeConsumer.createConsumer((TimeMilliVector) vector, columnIndex, nullable, calendar);
+      case Timestamp:
+        if (config.getCalendar() == null) {
+          return TimestampConsumer.createConsumer((TimeStampMilliVector) vector, columnIndex, nullable);
         } else {
-          ts = rs.getTimestamp(columnIndex);
+          return TimestampTZConsumer.createConsumer((TimeStampMilliTZVector) vector, columnIndex, nullable, calendar);
         }
-
-        // TODO: Need to handle precision such as milli, micro, nano
-        updateVector((TimeStampVector) vector, ts, !rs.wasNull(), rowCount);
-        break;
-      case Types.BINARY:
-      case Types.VARBINARY:
-      case Types.LONGVARBINARY:
-        updateVector((VarBinaryVector) vector,
-                rs.getBinaryStream(columnIndex), !rs.wasNull(), rowCount);
-        break;
-      case Types.ARRAY:
-        updateVector((ListVector) vector, rs, columnIndex, rowCount, config);
-        break;
-      case Types.CLOB:
-        updateVector((VarCharVector) vector,
-                rs.getClob(columnIndex), !rs.wasNull(), rowCount);
-        break;
-      case Types.BLOB:
-        updateVector((VarBinaryVector) vector,
-                rs.getBlob(columnIndex), !rs.wasNull(), rowCount);
-        break;
+      case List:
+        FieldVector childVector = ((ListVector) vector).getDataVector();
+        JdbcConsumer delegate = getConsumer(childVector.getField().getType(), JDBC_ARRAY_VALUE_COLUMN,
+            childVector.getField().isNullable(), childVector, config);
+        return ArrayConsumer.createConsumer((ListVector) vector, delegate, columnIndex, nullable);
+      case Null:
+        return new NullConsumer((NullVector) vector);
       default:
         // no-op, shouldn't get here
-        break;
+        throw new UnsupportedOperationException();
     }
-  }
-
-  private static void updateVector(BitVector bitVector, boolean value, boolean isNonNull, int rowCount) {
-    NullableBitHolder holder = new NullableBitHolder();
-    holder.isSet = isNonNull ? 1 : 0;
-    if (isNonNull) {
-      holder.value = value ? 1 : 0;
-    }
-    bitVector.setSafe(rowCount, holder);
-    bitVector.setValueCount(rowCount + 1);
-  }
-
-  private static void updateVector(TinyIntVector tinyIntVector, int value, boolean isNonNull, int rowCount) {
-    NullableTinyIntHolder holder = new NullableTinyIntHolder();
-    holder.isSet = isNonNull ? 1 : 0;
-    if (isNonNull) {
-      holder.value = (byte) value;
-    }
-    tinyIntVector.setSafe(rowCount, holder);
-    tinyIntVector.setValueCount(rowCount + 1);
-  }
-
-  private static void updateVector(SmallIntVector smallIntVector, int value, boolean isNonNull, int rowCount) {
-    NullableSmallIntHolder holder = new NullableSmallIntHolder();
-    holder.isSet = isNonNull ? 1 : 0;
-    if (isNonNull) {
-      holder.value = (short) value;
-    }
-    smallIntVector.setSafe(rowCount, holder);
-    smallIntVector.setValueCount(rowCount + 1);
-  }
-
-  private static void updateVector(IntVector intVector, int value, boolean isNonNull, int rowCount) {
-    NullableIntHolder holder = new NullableIntHolder();
-    holder.isSet = isNonNull ? 1 : 0;
-    if (isNonNull) {
-      holder.value = value;
-    }
-    intVector.setSafe(rowCount, holder);
-    intVector.setValueCount(rowCount + 1);
-  }
-
-  private static void updateVector(BigIntVector bigIntVector, long value, boolean isNonNull, int rowCount) {
-    NullableBigIntHolder holder = new NullableBigIntHolder();
-    holder.isSet = isNonNull ? 1 : 0;
-    if (isNonNull) {
-      holder.value = value;
-    }
-    bigIntVector.setSafe(rowCount, holder);
-    bigIntVector.setValueCount(rowCount + 1);
-  }
-
-  private static void updateVector(DecimalVector decimalVector, BigDecimal value, boolean isNonNull, int rowCount) {
-    NullableDecimalHolder holder = new NullableDecimalHolder();
-    holder.isSet = isNonNull ? 1 : 0;
-    if (isNonNull) {
-      holder.precision = value.precision();
-      holder.scale = value.scale();
-      holder.buffer = decimalVector.getAllocator().buffer(DEFAULT_BUFFER_SIZE);
-      holder.start = 0;
-      DecimalUtility.writeBigDecimalToArrowBuf(value, holder.buffer, holder.start);
-    }
-    decimalVector.setSafe(rowCount, holder);
-    decimalVector.setValueCount(rowCount + 1);
-  }
-
-  private static void updateVector(Float4Vector float4Vector, float value, boolean isNonNull, int rowCount) {
-    NullableFloat4Holder holder = new NullableFloat4Holder();
-    holder.isSet = isNonNull ? 1 : 0;
-    if (isNonNull) {
-      holder.value = value;
-    }
-    float4Vector.setSafe(rowCount, holder);
-    float4Vector.setValueCount(rowCount + 1);
-  }
-
-  private static void updateVector(Float8Vector float8Vector, double value, boolean isNonNull, int rowCount) {
-    NullableFloat8Holder holder = new NullableFloat8Holder();
-    holder.isSet = isNonNull ? 1 : 0;
-    if (isNonNull) {
-      holder.value = value;
-    }
-    float8Vector.setSafe(rowCount, holder);
-    float8Vector.setValueCount(rowCount + 1);
-  }
-
-  private static void updateVector(VarCharVector varcharVector, String value, boolean isNonNull, int rowCount) {
-    NullableVarCharHolder holder = new NullableVarCharHolder();
-    holder.isSet = isNonNull ? 1 : 0;
-    varcharVector.setIndexDefined(rowCount);
-    if (isNonNull) {
-      byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
-      holder.buffer = varcharVector.getAllocator().buffer(bytes.length);
-      holder.buffer.setBytes(0, bytes, 0, bytes.length);
-      holder.start = 0;
-      holder.end = bytes.length;
-    } else {
-      holder.buffer = varcharVector.getAllocator().buffer(0);
-    }
-    varcharVector.setSafe(rowCount, holder);
-    varcharVector.setValueCount(rowCount + 1);
-  }
-
-  private static void updateVector(DateMilliVector dateMilliVector, Date date, boolean isNonNull, int rowCount) {
-    NullableDateMilliHolder holder = new NullableDateMilliHolder();
-    holder.isSet = isNonNull ? 1 : 0;
-    if (isNonNull) {
-      holder.value = date.getTime();
-    }
-    dateMilliVector.setSafe(rowCount, holder);
-    dateMilliVector.setValueCount(rowCount + 1);
-  }
-
-  private static void updateVector(TimeMilliVector timeMilliVector, Time time, boolean isNonNull, int rowCount) {
-    NullableTimeMilliHolder holder = new NullableTimeMilliHolder();
-    holder.isSet = isNonNull ? 1 : 0;
-    if (isNonNull && time != null) {
-      holder.value = (int) time.getTime();
-    }
-    timeMilliVector.setSafe(rowCount, holder);
-    timeMilliVector.setValueCount(rowCount + 1);
-  }
-
-  private static void updateVector(
-      TimeStampVector timeStampVector,
-      Timestamp timestamp,
-      boolean isNonNull,
-      int rowCount) {
-    //TODO: Need to handle precision such as milli, micro, nano
-    timeStampVector.setValueCount(rowCount + 1);
-    if (timestamp != null) {
-      timeStampVector.setSafe(rowCount, timestamp.getTime());
-    } else {
-      timeStampVector.setNull(rowCount);
-    }
-  }
-
-  private static void updateVector(
-      VarBinaryVector varBinaryVector,
-      InputStream is,
-      boolean isNonNull,
-      int rowCount) throws IOException {
-    varBinaryVector.setValueCount(rowCount + 1);
-    if (isNonNull && is != null) {
-      VarBinaryHolder holder = new VarBinaryHolder();
-      ArrowBuf arrowBuf = varBinaryVector.getDataBuffer();
-      holder.start = 0;
-      byte[] bytes = new byte[DEFAULT_STREAM_BUFFER_SIZE];
-      int total = 0;
-      while (true) {
-        int read = is.read(bytes, 0, DEFAULT_STREAM_BUFFER_SIZE);
-        if (read == -1) {
-          break;
-        }
-        arrowBuf.setBytes(total, bytes, total, read);
-        total += read;
-      }
-      holder.end = total;
-      holder.buffer = arrowBuf;
-      varBinaryVector.set(rowCount, holder);
-      varBinaryVector.setIndexDefined(rowCount);
-    } else {
-      varBinaryVector.setNull(rowCount);
-    }
-  }
-
-  private static void updateVector(
-      VarCharVector varcharVector,
-      Clob clob,
-      boolean isNonNull,
-      int rowCount) throws SQLException, IOException {
-    varcharVector.setValueCount(rowCount + 1);
-    if (isNonNull && clob != null) {
-      VarCharHolder holder = new VarCharHolder();
-      ArrowBuf arrowBuf = varcharVector.getDataBuffer();
-      holder.start = 0;
-      long length = clob.length();
-      int read = 1;
-      int readSize = length < DEFAULT_CLOB_SUBSTRING_READ_SIZE ? (int) length : DEFAULT_CLOB_SUBSTRING_READ_SIZE;
-      int totalBytes = 0;
-      while (read <= length) {
-        String str = clob.getSubString(read, readSize);
-        byte[] bytes = str.getBytes(StandardCharsets.UTF_8);
-        arrowBuf.setBytes(totalBytes, new ByteArrayInputStream(bytes, 0, bytes.length), bytes.length);
-        totalBytes += bytes.length;
-        read += readSize;
-      }
-      holder.end = totalBytes;
-      holder.buffer = arrowBuf;
-      varcharVector.set(rowCount, holder);
-      varcharVector.setIndexDefined(rowCount);
-    } else {
-      varcharVector.setNull(rowCount);
-    }
-  }
-
-  private static void updateVector(VarBinaryVector varBinaryVector, Blob blob, boolean isNonNull, int rowCount)
-      throws SQLException, IOException {
-    updateVector(varBinaryVector, blob != null ? blob.getBinaryStream() : null, isNonNull, rowCount);
-  }
-
-  private static void updateVector(
-      ListVector listVector,
-      ResultSet resultSet,
-      int arrayIndex,
-      int rowCount,
-      JdbcToArrowConfig config)
-      throws SQLException, IOException {
-
-    final JdbcFieldInfo fieldInfo = getJdbcFieldInfoForArraySubType(resultSet.getMetaData(), arrayIndex, config);
-    if (fieldInfo == null) {
-      throw new IllegalArgumentException("Column " + arrayIndex + " is an array of unknown type.");
-    }
-
-    final int valueCount = listVector.getValueCount();
-    final Array array = resultSet.getArray(arrayIndex);
-
-    FieldVector fieldVector = listVector.getDataVector();
-    int arrayRowCount = 0;
-
-    if (!resultSet.wasNull()) {
-      listVector.startNewValue(rowCount);
-
-      try (ResultSet rs = array.getResultSet()) {
-
-        while (rs.next()) {
-          jdbcToFieldVector(
-              rs,
-              JDBC_ARRAY_VALUE_COLUMN,
-              fieldInfo.getJdbcType(),
-              valueCount + arrayRowCount,
-              fieldVector,
-              config);
-          arrayRowCount++;
-        }
-      }
-
-      listVector.endValue(rowCount, arrayRowCount);
-    }
-
-    listVector.setValueCount(valueCount + arrayRowCount);
   }
 }

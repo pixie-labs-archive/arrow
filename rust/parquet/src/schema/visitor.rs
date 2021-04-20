@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::basic::{LogicalType, Repetition};
+use crate::basic::{ConvertedType, Repetition};
 use crate::errors::ParquetError::General;
 use crate::errors::Result;
 use crate::schema::types::{Type, TypePtr};
@@ -50,7 +50,7 @@ pub trait TypeVisitor<R, C> {
                         {
                             self.visit_list_with_item(
                                 list_type.clone(),
-                                list_item,
+                                list_item.clone(),
                                 context,
                             )
                         } else {
@@ -70,13 +70,13 @@ pub trait TypeVisitor<R, C> {
                         {
                             self.visit_list_with_item(
                                 list_type.clone(),
-                                fields.first().unwrap(),
+                                fields.first().unwrap().clone(),
                                 context,
                             )
                         } else {
                             self.visit_list_with_item(
                                 list_type.clone(),
-                                list_item,
+                                list_item.clone(),
                                 context,
                             )
                         }
@@ -100,9 +100,9 @@ pub trait TypeVisitor<R, C> {
         if cur_type.is_primitive() {
             self.visit_primitive(cur_type, context)
         } else {
-            match cur_type.get_basic_info().logical_type() {
-                LogicalType::LIST => self.visit_list(cur_type, context),
-                LogicalType::MAP | LogicalType::MAP_KEY_VALUE => {
+            match cur_type.get_basic_info().converted_type() {
+                ConvertedType::LIST => self.visit_list(cur_type, context),
+                ConvertedType::MAP | ConvertedType::MAP_KEY_VALUE => {
                     self.visit_map(cur_type, context)
                 }
                 _ => self.visit_struct(cur_type, context),
@@ -114,7 +114,7 @@ pub trait TypeVisitor<R, C> {
     fn visit_list_with_item(
         &mut self,
         list_type: TypePtr,
-        item_type: &Type,
+        item_type: TypePtr,
         context: C,
     ) -> Result<R>;
 }
@@ -125,8 +125,8 @@ mod tests {
     use crate::basic::Type as PhysicalType;
     use crate::errors::Result;
     use crate::schema::parser::parse_message_type;
-    use crate::schema::types::{Type, TypePtr};
-    use std::rc::Rc;
+    use crate::schema::types::TypePtr;
+    use std::sync::Arc;
 
     struct TestVisitorContext {}
     struct TestVisitor {
@@ -174,7 +174,7 @@ mod tests {
         fn visit_list_with_item(
             &mut self,
             list_type: TypePtr,
-            item_type: &Type,
+            item_type: TypePtr,
             _context: TestVisitorContext,
         ) -> Result<bool> {
             assert_eq!(
@@ -203,7 +203,7 @@ mod tests {
                 .get_fields()
                 .iter()
                 .find(|t| t.name() == name)
-                .map(|t| t.clone())
+                .cloned()
                 .unwrap()
         }
     }
@@ -225,7 +225,7 @@ mod tests {
             }
         ";
 
-        let parquet_type = Rc::new(parse_message_type(&message_type).unwrap());
+        let parquet_type = Arc::new(parse_message_type(&message_type).unwrap());
 
         let mut visitor = TestVisitor::new(parquet_type.clone());
         for f in parquet_type.get_fields() {

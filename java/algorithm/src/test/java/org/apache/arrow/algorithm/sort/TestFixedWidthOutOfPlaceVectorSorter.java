@@ -18,16 +18,19 @@
 package org.apache.arrow.algorithm.sort;
 
 import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+
+import java.util.stream.IntStream;
 
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
-
 import org.apache.arrow.vector.BigIntVector;
 import org.apache.arrow.vector.Float4Vector;
 import org.apache.arrow.vector.Float8Vector;
 import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.SmallIntVector;
 import org.apache.arrow.vector.TinyIntVector;
+import org.apache.arrow.vector.testing.ValueVectorDataPopulator;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
@@ -283,7 +286,7 @@ public class TestFixedWidthOutOfPlaceVectorSorter {
   }
 
   @Test
-  public void testSortDobule() {
+  public void testSortDouble() {
     try (Float8Vector vec = new Float8Vector("", allocator)) {
       vec.allocateNew(10);
       vec.setValueCount(10);
@@ -325,6 +328,38 @@ public class TestFixedWidthOutOfPlaceVectorSorter {
       Assert.assertEquals(Double.NaN, sortedVec.get(9), 0);
 
       sortedVec.close();
+    }
+  }
+
+  @Test
+  public void testSortInt2() {
+    try (IntVector vec = new IntVector("", allocator)) {
+      ValueVectorDataPopulator.setVector(vec,
+          0, 1, 2, 3, 4, 5, 30, 31, 32, 33,
+          34, 35, 60, 61, 62, 63, 64, 65, 6, 7,
+          8, 9, 10, 11, 36, 37, 38, 39, 40, 41,
+          66, 67, 68, 69, 70, 71);
+
+      // sort the vector
+      FixedWidthOutOfPlaceVectorSorter sorter = new FixedWidthOutOfPlaceVectorSorter();
+      VectorValueComparator<IntVector> comparator = DefaultVectorComparators.createDefaultComparator(vec);
+
+      try (IntVector sortedVec = (IntVector) vec.getField().getFieldType().createNewSingleVector("", allocator, null)) {
+        sortedVec.allocateNew(vec.getValueCount());
+        sortedVec.setValueCount(vec.getValueCount());
+
+        sorter.sortOutOfPlace(vec, sortedVec, comparator);
+
+        // verify results
+        int[] actual = new int[sortedVec.getValueCount()];
+        IntStream.range(0, sortedVec.getValueCount()).forEach(
+            i -> actual[i] = sortedVec.get(i));
+
+        assertArrayEquals(
+            new int[]{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+                11, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
+                40, 41, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71}, actual);
+      }
     }
   }
 }

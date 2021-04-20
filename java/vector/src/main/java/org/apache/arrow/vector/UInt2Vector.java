@@ -19,6 +19,7 @@ package org.apache.arrow.vector;
 
 import static org.apache.arrow.vector.NullCheckingForGet.NULL_CHECKING_ENABLED;
 
+import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.complex.impl.UInt2ReaderImpl;
 import org.apache.arrow.vector.complex.reader.FieldReader;
@@ -29,14 +30,18 @@ import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.FieldType;
 import org.apache.arrow.vector.util.TransferPair;
 
-import io.netty.buffer.ArrowBuf;
-
 /**
  * UInt2Vector implements a fixed width (2 bytes) vector of
  * integer values which could be null. A validity buffer (bit vector) is
  * maintained to track which elements in the vector are null.
  */
-public class UInt2Vector extends BaseFixedWidthVector implements BaseIntVector {
+public final class UInt2Vector extends BaseFixedWidthVector implements BaseIntVector {
+
+  /**
+   * The maximum 16-bit unsigned integer.
+   */
+  public static final char MAX_UINT2 = (char) 0XFFFF;
+
   private static final byte TYPE_WIDTH = 2;
   private final FieldReader reader;
 
@@ -80,7 +85,7 @@ public class UInt2Vector extends BaseFixedWidthVector implements BaseIntVector {
    * @return value stored at the index.
    */
   public static char get(final ArrowBuf buffer, final int index) {
-    return buffer.getChar(index * TYPE_WIDTH);
+    return buffer.getChar((long) index * TYPE_WIDTH);
   }
 
   /**
@@ -93,7 +98,7 @@ public class UInt2Vector extends BaseFixedWidthVector implements BaseIntVector {
     if (NULL_CHECKING_ENABLED && isSet(index) == 0) {
       throw new IllegalStateException("Value at index is null");
     }
-    return valueBuffer.getChar(index * TYPE_WIDTH);
+    return valueBuffer.getChar((long) index * TYPE_WIDTH);
   }
 
   /**
@@ -109,7 +114,7 @@ public class UInt2Vector extends BaseFixedWidthVector implements BaseIntVector {
       return;
     }
     holder.isSet = 1;
-    holder.value = valueBuffer.getChar(index * TYPE_WIDTH);
+    holder.value = valueBuffer.getChar((long) index * TYPE_WIDTH);
   }
 
   /**
@@ -122,7 +127,7 @@ public class UInt2Vector extends BaseFixedWidthVector implements BaseIntVector {
     if (isSet(index) == 0) {
       return null;
     } else {
-      return valueBuffer.getChar(index * TYPE_WIDTH);
+      return valueBuffer.getChar((long) index * TYPE_WIDTH);
     }
   }
 
@@ -135,11 +140,11 @@ public class UInt2Vector extends BaseFixedWidthVector implements BaseIntVector {
 
 
   private void setValue(int index, int value) {
-    valueBuffer.setChar(index * TYPE_WIDTH, value);
+    valueBuffer.setChar((long) index * TYPE_WIDTH, value);
   }
 
   private void setValue(int index, char value) {
-    valueBuffer.setChar(index * TYPE_WIDTH, value);
+    valueBuffer.setChar((long) index * TYPE_WIDTH, value);
   }
 
   /**
@@ -149,7 +154,7 @@ public class UInt2Vector extends BaseFixedWidthVector implements BaseIntVector {
    * @param value   value of element
    */
   public void set(int index, int value) {
-    BitVectorHelper.setValidityBitToOne(validityBuffer, index);
+    BitVectorHelper.setBit(validityBuffer, index);
     setValue(index, value);
   }
 
@@ -160,7 +165,7 @@ public class UInt2Vector extends BaseFixedWidthVector implements BaseIntVector {
    * @param value   value of element
    */
   public void set(int index, char value) {
-    BitVectorHelper.setValidityBitToOne(validityBuffer, index);
+    BitVectorHelper.setBit(validityBuffer, index);
     setValue(index, value);
   }
 
@@ -176,10 +181,10 @@ public class UInt2Vector extends BaseFixedWidthVector implements BaseIntVector {
     if (holder.isSet < 0) {
       throw new IllegalArgumentException();
     } else if (holder.isSet > 0) {
-      BitVectorHelper.setValidityBitToOne(validityBuffer, index);
+      BitVectorHelper.setBit(validityBuffer, index);
       setValue(index, holder.value);
     } else {
-      BitVectorHelper.setValidityBit(validityBuffer, index, 0);
+      BitVectorHelper.unsetBit(validityBuffer, index);
     }
   }
 
@@ -190,7 +195,7 @@ public class UInt2Vector extends BaseFixedWidthVector implements BaseIntVector {
    * @param holder  data holder for value of element
    */
   public void set(int index, UInt2Holder holder) {
-    BitVectorHelper.setValidityBitToOne(validityBuffer, index);
+    BitVectorHelper.setBit(validityBuffer, index);
     setValue(index, holder.value);
   }
 
@@ -247,18 +252,6 @@ public class UInt2Vector extends BaseFixedWidthVector implements BaseIntVector {
   }
 
   /**
-   * Set the element at the given index to null.
-   *
-   * @param index   position of element
-   */
-  public void setNull(int index) {
-    handleSafe(index);
-    // not really needed to set the bit to 0 as long as
-    // the buffer always starts from 0.
-    BitVectorHelper.setValidityBit(validityBuffer, index, 0);
-  }
-
-  /**
    * Sets the given index to value is isSet is positive, otherwise sets
    * the position as invalid/null.
    */
@@ -266,7 +259,7 @@ public class UInt2Vector extends BaseFixedWidthVector implements BaseIntVector {
     if (isSet > 0) {
       set(index, value);
     } else {
-      BitVectorHelper.setValidityBit(validityBuffer, index, 0);
+      BitVectorHelper.unsetBit(validityBuffer, index);
     }
   }
 

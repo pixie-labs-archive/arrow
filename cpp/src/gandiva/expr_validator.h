@@ -15,14 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#ifndef GANDIVA_EXPR_VALIDATOR_H
-#define GANDIVA_EXPR_VALIDATOR_H
+#pragma once
 
 #include <string>
 #include <unordered_map>
 
 #include "arrow/status.h"
-#include "boost/functional/hash.hpp"
 
 #include "gandiva/arrow.h"
 #include "gandiva/expression.h"
@@ -62,6 +60,7 @@ class ExprValidator : public NodeVisitor {
   Status Visit(const BooleanNode& node) override;
   Status Visit(const InExpressionNode<int32_t>& node) override;
   Status Visit(const InExpressionNode<int64_t>& node) override;
+  Status Visit(const InExpressionNode<gandiva::DecimalScalar128>& node) override;
   Status Visit(const InExpressionNode<std::string>& node) override;
   Status ValidateInExpression(size_t number_of_values, DataTypePtr in_expr_return_type,
                               DataTypePtr type_of_values);
@@ -72,10 +71,8 @@ class ExprValidator : public NodeVisitor {
 
   SchemaPtr schema_;
 
-  using FieldMap = std::unordered_map<std::string, FieldPtr, boost::hash<std::string>>;
+  using FieldMap = std::unordered_map<std::string, FieldPtr>;
   FieldMap field_map_;
 };
 
 }  // namespace gandiva
-
-#endif  // GANDIVA_EXPR_VALIDATOR_H

@@ -15,123 +15,125 @@
 # specific language governing permissions and limitations
 # under the License.
 
-#' Help installing the Arrow C++ library
+#' Install or upgrade the Arrow library
 #'
-#' Binary package installations should come with a working Arrow C++ library,
-#' but when installing from source, you'll need to obtain the C++ library
-#' first. This function offers guidance on how to get the C++ library depending
-#' on your operating system and package version.
+#' Use this function to install the latest release of `arrow`, to switch to or
+#' from a nightly development version, or on Linux to try reinstalling with
+#' all necessary C++ dependencies.
+#'
+#' Note that, unlike packages like `tensorflow`, `blogdown`, and others that
+#' require external dependencies, you do not need to run `install_arrow()`
+#' after a successful `arrow` installation.
+#'
+#' @param nightly logical: Should we install a development version of the
+#' package, or should we install from CRAN (the default).
+#' @param binary On Linux, value to set for the environment variable
+#' `LIBARROW_BINARY`, which governs how C++ binaries are used, if at all.
+#' The default value, `TRUE`, tells the installation script to detect the
+#' Linux distribution and version and find an appropriate C++ library. `FALSE`
+#' would tell the script not to retrieve a binary and instead build Arrow C++
+#' from source. Other valid values are strings corresponding to a Linux
+#' distribution-version, to override the value that would be detected.
+#' See `vignette("install", package = "arrow")` for further details.
+#' @param use_system logical: Should we use `pkg-config` to look for Arrow
+#' system packages? Default is `FALSE`. If `TRUE`, source installation may be
+#' faster, but there is a risk of version mismatch. This sets the
+#' `ARROW_USE_PKG_CONFIG` environment variable.
+#' @param minimal logical: If building from source, should we build without
+#' optional dependencies (compression libraries, for example)? Default is
+#' `FALSE`. This sets the `LIBARROW_MINIMAL` environment variable.
+#' @param verbose logical: Print more debugging output when installing? Default
+#' is `FALSE`. This sets the `ARROW_R_DEV` environment variable.
+#' @param repos character vector of base URLs of the repositories to install
+#' from (passed to `install.packages()`)
+#' @param ... Additional arguments passed to `install.packages()`
 #' @export
-#' @importFrom utils packageVersion installed.packages
-install_arrow <- function() {
-  os <- tolower(Sys.info()[["sysname"]])
-  # c("windows", "darwin", "linux", "sunos") # win/mac/linux/solaris
-  version <- packageVersion("arrow")
-  # From CRAN check:
-  rep <- installed.packages(fields="Repository")["arrow", "Repository"]
-  from_cran <- identical(rep, "CRAN")
-  # Is it possible to tell if was a binary install from CRAN vs. source?
+#' @importFrom utils install.packages
+#' @seealso [arrow_available()] to see if the package was configured with
+#' necessary C++ dependencies. `vignette("install", package = "arrow")` for
+#' more ways to tune installation on Linux.
+install_arrow <- function(nightly = FALSE,
+                          binary = Sys.getenv("LIBARROW_BINARY", TRUE),
+                          use_system = Sys.getenv("ARROW_USE_PKG_CONFIG", FALSE),
+                          minimal = Sys.getenv("LIBARROW_MINIMAL", FALSE),
+                          verbose = Sys.getenv("ARROW_R_DEV", FALSE),
+                          repos = getOption("repos"),
+                          ...) {
+  sysname <- tolower(Sys.info()[["sysname"]])
+  conda <- isTRUE(grepl("conda", R.Version()$platform))
 
-  message(install_arrow_msg(arrow_available(), version, from_cran, os))
-}
-
-install_arrow_msg <- function(has_arrow, version, from_cran, os) {
-  # TODO: check if there is a newer version on CRAN?
-
-  # install_arrow() sends "version" as a "package_version" class, but for
-  # convenience, this also accepts a string like "0.13.0". Calling
-  # `package_version` is idempotent so do it again, and then `unclass` to get
-  # the integers. Then see how many there are.
-  dev_version <- length(unclass(package_version(version))[[1]]) > 3
-  # Based on these parameters, assemble a string with installation advice
-  if (has_arrow) {
-    # Respond that you already have it
-    msg <- ALREADY_HAVE
-  } else if (os == "sunos") {
-    # Good luck with that.
-    msg <- c(SEE_DEV_GUIDE, THEN_REINSTALL)
-  } else if (os == "linux") {
-    if (dev_version) {
-      # Point to compilation instructions on readme
-      msg <- c(SEE_DEV_GUIDE, THEN_REINSTALL)
+  if (conda) {
+    if (nightly) {
+      system("conda install -y -c arrow-nightlies -c conda-forge --strict-channel-priority r-arrow")
     } else {
-      # Suggest arrow.apache.org/install for PPAs, or compilation instructions
-      msg <- c(paste(SEE_ARROW_INSTALL, OR_SEE_DEV_GUIDE), THEN_REINSTALL)
+      system("conda install -y -c conda-forge --strict-channel-priority r-arrow")
     }
-  } else if (!dev_version && !from_cran) {
-    # Windows or Mac with a released version but not from CRAN
-    # Recommend installing released binary package from CRAN
-    msg <- INSTALL_FROM_CRAN
   } else {
-    # Windows or Mac, most likely a dev version
-    # for each OS, recommend dev installation, refer to readme
-    # TODO: if there is a newer version on CRAN, recommend CRAN
-    if (os == "windows") {
-      msg <- c(paste(FIND_WIN_BINARY, OR_SEE_DEV_GUIDE), THEN_REINSTALL)
-    } else {
-      # macOS
-      msg <- c(paste(FIND_MAC_BINARY, OR_SEE_DEV_GUIDE), THEN_REINSTALL)
+    Sys.setenv(
+      LIBARROW_DOWNLOAD = "true",
+      LIBARROW_BINARY = binary,
+      LIBARROW_MINIMAL = minimal,
+      ARROW_R_DEV = verbose,
+      ARROW_USE_PKG_CONFIG = use_system
+    )
+    # On the M1, we can't use the usual autobrew, which pulls Intel dependencies
+    apple_m1 <- grepl("arm-apple|aarch64.*darwin", R.Version()$platform)
+    # On Rosetta, we have to build without JEMALLOC, so we also can't autobrew
+    rosetta <- identical(sysname, "darwin") && identical(system("sysctl -n sysctl.proc_translated", intern = TRUE), "1")
+    if (rosetta) {
+      Sys.setenv(ARROW_JEMALLOC = "OFF")
     }
+    if (apple_m1 || rosetta) {
+      Sys.setenv(FORCE_BUNDLED_BUILD = "true")
+    }
+
+    opts <- list()
+    if (apple_m1 || rosetta) {
+      # Skip binaries (esp. for rosetta)
+      opts$pkgType <- "source"
+    } else if (isTRUE(binary)) {
+      # Unless otherwise directed, don't consider newer source packages when
+      # options(pkgType) == "both" (default on win/mac)
+      opts$install.packages.check.source <- "no"
+      opts$install.packages.compile.from.source <- "never"
+    }
+    if (length(opts)) {
+      old <- options(opts)
+      on.exit(options(old))
+    }
+    install.packages("arrow", repos = arrow_repos(repos, nightly), ...)
   }
-  # Common postscript
-  msg <- c(msg, SEE_README, REPORT_ISSUE)
-  paste(msg, collapse="\n\n")
+  if ("arrow" %in% loadedNamespaces()) {
+    # If you've just sourced this file, "arrow" won't be (re)loaded
+    reload_arrow()
+  }
 }
 
-ALREADY_HAVE <- paste(
-  "It appears you already have Arrow installed successfully:",
-  "are you trying to install a different version of the library?"
-)
+arrow_repos <- function(repos = getOption("repos"), nightly = FALSE) {
+  if (length(repos) == 0 || identical(repos, c(CRAN = "@CRAN@"))) {
+    # Set the default/CDN
+    repos <- "https://cloud.r-project.org/"
+  }
+  dev_repo <- getOption("arrow.dev_repo", "https://arrow-r-nightly.s3.amazonaws.com")
+  # Remove it if it's there (so nightly=FALSE won't accidentally pull from it)
+  repos <- setdiff(repos, dev_repo)
+  if (nightly) {
+    # Add it first
+    repos <- c(dev_repo, repos)
+  }
+  repos
+}
 
-SEE_DEV_GUIDE <- paste(
-  "See the Arrow C++ developer guide",
-  "<https://arrow.apache.org/docs/developers/cpp.html>",
-  "for instructions on building the library from source."
-)
-# Variation of that
-OR_SEE_DEV_GUIDE <- paste0(
-  "Or, s",
-  substr(SEE_DEV_GUIDE, 2, nchar(SEE_DEV_GUIDE))
-)
-
-SEE_ARROW_INSTALL <- paste(
-  "See the Apache Arrow project installation page",
-  "<https://arrow.apache.org/install/>",
-  "for how to install the C++ package from a PPA."
-)
-
-THEN_REINSTALL <- paste(
-  "After you've installed the C++ library,",
-  "you'll need to reinstall the R package from source to find it."
-)
-
-SEE_README <- paste(
-  "Refer to the R package README",
-  "<https://github.com/apache/arrow/blob/master/r/README.md>",
-  "for further details."
-)
-
-REPORT_ISSUE <- paste(
-  "If you have other trouble, or if you think this message could be improved,",
-  "please report an issue here:",
-  "<https://issues.apache.org/jira/projects/ARROW/issues>"
-)
-
-INSTALL_FROM_CRAN <- paste(
-  'Try installing the package from CRAN:',
-  '`install.packages("arrow")`'
-)
-
-FIND_WIN_BINARY <- paste(
-  "You may be able to download a development version of the C++ binary",
-  "from the Apache Arrow project's Appveyor:",
-  "<https://ci.appveyor.com/project/ApacheSoftwareFoundation/arrow>.",
-  "Select an R job from a recent build,",
-  'and download the `build\arrow-*.zip` file from the "Artifacts" tab.',
-  "Then, set the RWINLIB_LOCAL environment variable to point to that file."
-)
-
-FIND_MAC_BINARY <- paste(
-  "You may be able to get a development version of the Arrow C++ library",
-  "using Homebrew: `brew install apache-arrow --HEAD`"
-)
+reload_arrow <- function() {
+  if (requireNamespace("pkgload", quietly = TRUE)) {
+    is_attached <- "package:arrow" %in% search()
+    pkgload::unload("arrow")
+    if (is_attached) {
+      require("arrow", character.only = TRUE, quietly = TRUE)
+    } else {
+      requireNamespace("arrow", quietly = TRUE)
+    }
+  } else {
+    message("Please restart R to use the 'arrow' package.")
+  }
+}

@@ -15,23 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#ifndef PARQUET_BLOOM_FILTER_H
-#define PARQUET_BLOOM_FILTER_H
+#pragma once
 
 #include <cmath>
 #include <cstdint>
 #include <memory>
 
+#include "arrow/util/bit_util.h"
 #include "arrow/util/logging.h"
 #include "parquet/hasher.h"
 #include "parquet/platform.h"
 #include "parquet/types.h"
-
-namespace arrow {
-
-class MemoryPool;
-
-}  // namespace arrow
 
 namespace parquet {
 
@@ -251,5 +245,3 @@ class PARQUET_EXPORT BlockSplitBloomFilter : public BloomFilter {
 };
 
 }  // namespace parquet
-
-#endif  // PARQUET_BLOOM_FILTER_H

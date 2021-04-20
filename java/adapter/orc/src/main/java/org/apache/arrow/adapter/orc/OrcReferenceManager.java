@@ -19,12 +19,11 @@ package org.apache.arrow.adapter.orc;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.OwnershipTransferResult;
 import org.apache.arrow.memory.ReferenceManager;
 import org.apache.arrow.util.Preconditions;
-
-import io.netty.buffer.ArrowBuf;
 
 /**
  * A simple reference manager implementation for memory allocated by native code.
@@ -75,7 +74,7 @@ public class OrcReferenceManager implements ReferenceManager {
 
   @Override
   public void retain(int increment) {
-    Preconditions.checkArgument(increment > 0, "retain(%d) argument is not positive", increment);
+    Preconditions.checkArgument(increment > 0, "retain(%s) argument is not positive", increment);
     bufRefCnt.addAndGet(increment);
   }
 
@@ -86,7 +85,7 @@ public class OrcReferenceManager implements ReferenceManager {
   }
 
   @Override
-  public ArrowBuf deriveBuffer(ArrowBuf sourceBuffer, int index, int length) {
+  public ArrowBuf deriveBuffer(ArrowBuf sourceBuffer, long index, long length) {
     final long derivedBufferAddress = sourceBuffer.memoryAddress() + index;
 
     // create new ArrowBuf
@@ -94,8 +93,8 @@ public class OrcReferenceManager implements ReferenceManager {
             this,
             null,
             length, // length (in bytes) in the underlying memory chunk for this new ArrowBuf
-            derivedBufferAddress, // starting byte address in the underlying memory for this new ArrowBuf,
-            false);
+            derivedBufferAddress // starting byte address in the underlying memory for this new ArrowBuf,
+            );
 
     return derivedBuf;
   }
@@ -111,12 +110,12 @@ public class OrcReferenceManager implements ReferenceManager {
   }
 
   @Override
-  public int getSize() {
-    return (int)memory.getSize();
+  public long getSize() {
+    return memory.getSize();
   }
 
   @Override
-  public int getAccountedSize() {
+  public long getAccountedSize() {
     return 0;
   }
 }

@@ -56,10 +56,7 @@ module RawRecordsDenseUnionArrayTests
     end
     records.each do |record|
       column = record[0]
-      if column.nil?
-        type_ids << nil
-        offsets << 0
-      elsif column.key?("0")
+      if column.key?("0")
         type_id = type_codes[0]
         type_ids << type_id
         offsets << (type_ids.count(type_id) - 1)
@@ -82,7 +79,6 @@ module RawRecordsDenseUnionArrayTests
   def test_null
     records = [
       [{"0" => nil}],
-      [nil],
     ]
     target = build(:null, records)
     assert_equal(records, target.raw_records)
@@ -91,7 +87,6 @@ module RawRecordsDenseUnionArrayTests
   def test_boolean
     records = [
       [{"0" => true}],
-      [nil],
       [{"1" => nil}],
     ]
     target = build(:boolean, records)
@@ -101,7 +96,6 @@ module RawRecordsDenseUnionArrayTests
   def test_int8
     records = [
       [{"0" => -(2 ** 7)}],
-      [nil],
       [{"1" => nil}],
     ]
     target = build(:int8, records)
@@ -111,7 +105,6 @@ module RawRecordsDenseUnionArrayTests
   def test_uint8
     records = [
       [{"0" => (2 ** 8) - 1}],
-      [nil],
       [{"1" => nil}],
     ]
     target = build(:uint8, records)
@@ -121,7 +114,6 @@ module RawRecordsDenseUnionArrayTests
   def test_int16
     records = [
       [{"0" => -(2 ** 15)}],
-      [nil],
       [{"1" => nil}],
     ]
     target = build(:int16, records)
@@ -131,7 +123,6 @@ module RawRecordsDenseUnionArrayTests
   def test_uint16
     records = [
       [{"0" => (2 ** 16) - 1}],
-      [nil],
       [{"1" => nil}],
     ]
     target = build(:uint16, records)
@@ -141,7 +132,6 @@ module RawRecordsDenseUnionArrayTests
   def test_int32
     records = [
       [{"0" => -(2 ** 31)}],
-      [nil],
       [{"1" => nil}],
     ]
     target = build(:int32, records)
@@ -151,7 +141,6 @@ module RawRecordsDenseUnionArrayTests
   def test_uint32
     records = [
       [{"0" => (2 ** 32) - 1}],
-      [nil],
       [{"1" => nil}],
     ]
     target = build(:uint32, records)
@@ -161,7 +150,6 @@ module RawRecordsDenseUnionArrayTests
   def test_int64
     records = [
       [{"0" => -(2 ** 63)}],
-      [nil],
       [{"1" => nil}],
     ]
     target = build(:int64, records)
@@ -171,7 +159,6 @@ module RawRecordsDenseUnionArrayTests
   def test_uint64
     records = [
       [{"0" => (2 ** 64) - 1}],
-      [nil],
       [{"1" => nil}],
     ]
     target = build(:uint64, records)
@@ -181,7 +168,6 @@ module RawRecordsDenseUnionArrayTests
   def test_float
     records = [
       [{"0" => -1.0}],
-      [nil],
       [{"1" => nil}],
     ]
     target = build(:float, records)
@@ -191,7 +177,6 @@ module RawRecordsDenseUnionArrayTests
   def test_double
     records = [
       [{"0" => -1.0}],
-      [nil],
       [{"1" => nil}],
     ]
     target = build(:double, records)
@@ -201,7 +186,6 @@ module RawRecordsDenseUnionArrayTests
   def test_binary
     records = [
       [{"0" => "\xff".b}],
-      [nil],
       [{"1" => nil}],
     ]
     target = build(:binary, records)
@@ -211,7 +195,6 @@ module RawRecordsDenseUnionArrayTests
   def test_string
     records = [
       [{"0" => "Ruby"}],
-      [nil],
       [{"1" => nil}],
     ]
     target = build(:string, records)
@@ -221,7 +204,6 @@ module RawRecordsDenseUnionArrayTests
   def test_date32
     records = [
       [{"0" => Date.new(1960, 1, 1)}],
-      [nil],
       [{"1" => nil}],
     ]
     target = build(:date32, records)
@@ -231,7 +213,6 @@ module RawRecordsDenseUnionArrayTests
   def test_date64
     records = [
       [{"0" => DateTime.new(1960, 1, 1, 2, 9, 30)}],
-      [nil],
       [{"1" => nil}],
     ]
     target = build(:date64, records)
@@ -241,7 +222,6 @@ module RawRecordsDenseUnionArrayTests
   def test_timestamp_second
     records = [
       [{"0" => Time.parse("1960-01-01T02:09:30Z")}],
-      [nil],
       [{"1" => nil}],
     ]
     target = build({
@@ -255,7 +235,6 @@ module RawRecordsDenseUnionArrayTests
   def test_timestamp_milli
     records = [
       [{"0" => Time.parse("1960-01-01T02:09:30.123Z")}],
-      [nil],
       [{"1" => nil}],
     ]
     target = build({
@@ -269,7 +248,6 @@ module RawRecordsDenseUnionArrayTests
   def test_timestamp_micro
     records = [
       [{"0" => Time.parse("1960-01-01T02:09:30.123456Z")}],
-      [nil],
       [{"1" => nil}],
     ]
     target = build({
@@ -283,7 +261,6 @@ module RawRecordsDenseUnionArrayTests
   def test_timestamp_nano
     records = [
       [{"0" => Time.parse("1960-01-01T02:09:30.123456789Z")}],
-      [nil],
       [{"1" => nil}],
     ]
     target = build({
@@ -295,9 +272,10 @@ module RawRecordsDenseUnionArrayTests
   end
 
   def test_time32_second
+    unit = Arrow::TimeUnit::SECOND
     records = [
-      [{"0" => 60 * 10}], # 00:10:00
-      [nil],
+      # 00:10:00
+      [{"0" => Arrow::Time.new(unit, 60 * 10)}],
       [{"1" => nil}],
     ]
     target = build({
@@ -309,9 +287,10 @@ module RawRecordsDenseUnionArrayTests
   end
 
   def test_time32_milli
+    unit = Arrow::TimeUnit::MILLI
     records = [
-      [{"0" => (60 * 10) * 1000 + 123}], # 00:10:00.123
-      [nil],
+      # 00:10:00.123
+      [{"0" => Arrow::Time.new(unit, (60 * 10) * 1000 + 123)}],
       [{"1" => nil}],
     ]
     target = build({
@@ -323,9 +302,10 @@ module RawRecordsDenseUnionArrayTests
   end
 
   def test_time64_micro
+    unit = Arrow::TimeUnit::MICRO
     records = [
-      [{"0" => (60 * 10) * 1_000_000 + 123_456}], # 00:10:00.123456
-      [nil],
+      # 00:10:00.123456
+      [{"0" => Arrow::Time.new(unit, (60 * 10) * 1_000_000 + 123_456)}],
       [{"1" => nil}],
     ]
     target = build({
@@ -337,10 +317,10 @@ module RawRecordsDenseUnionArrayTests
   end
 
   def test_time64_nano
+    unit = Arrow::TimeUnit::NANO
     records = [
       # 00:10:00.123456789
-      [{"0" => (60 * 10) * 1_000_000_000 + 123_456_789}],
-      [nil],
+      [{"0" => Arrow::Time.new(unit, (60 * 10) * 1_000_000_000 + 123_456_789)}],
       [{"1" => nil}],
     ]
     target = build({
@@ -354,7 +334,6 @@ module RawRecordsDenseUnionArrayTests
   def test_decimal128
     records = [
       [{"0" => BigDecimal("92.92")}],
-      [nil],
       [{"1" => nil}],
     ]
     target = build({
@@ -366,10 +345,23 @@ module RawRecordsDenseUnionArrayTests
     assert_equal(records, target.raw_records)
   end
 
+  def test_decimal256
+    records = [
+      [{"0" => BigDecimal("92.92")}],
+      [{"1" => nil}],
+    ]
+    target = build({
+                     type: :decimal256,
+                     precision: 38,
+                     scale: 2,
+                   },
+                   records)
+    assert_equal(records, target.raw_records)
+  end
+
   def test_list
     records = [
       [{"0" => [true, nil, false]}],
-      [nil],
       [{"1" => nil}],
     ]
     target = build({
@@ -386,7 +378,6 @@ module RawRecordsDenseUnionArrayTests
   def test_struct
     records = [
       [{"0" => {"sub_field" => true}}],
-      [nil],
       [{"1" => nil}],
       [{"0" => {"sub_field" => nil}}],
     ]
@@ -407,7 +398,6 @@ module RawRecordsDenseUnionArrayTests
     omit("Need to add support for SparseUnionArrayBuilder")
     records = [
       [{"0" => {"field1" => true}}],
-      [nil],
       [{"1" => nil}],
       [{"0" => {"field2" => nil}}],
     ]
@@ -433,7 +423,6 @@ module RawRecordsDenseUnionArrayTests
     omit("Need to add support for DenseUnionArrayBuilder")
     records = [
       [{"0" => {"field1" => true}}],
-      [nil],
       [{"1" => nil}],
       [{"0" => {"field2" => nil}}],
     ]
@@ -459,7 +448,6 @@ module RawRecordsDenseUnionArrayTests
     omit("Need to add support for DictionaryArrayBuilder")
     records = [
       [{"0" => "Ruby"}],
-      [nil],
       [{"1" => nil}],
       [{"0" => "GLib"}],
     ]

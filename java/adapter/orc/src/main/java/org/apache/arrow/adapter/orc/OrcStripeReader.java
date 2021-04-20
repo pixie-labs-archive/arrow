@@ -21,11 +21,10 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.stream.Collectors;
 
-import org.apache.arrow.flatbuf.MessageHeader;
+import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.ipc.ReadChannel;
-import org.apache.arrow.vector.ipc.message.ArrowDictionaryBatch;
 import org.apache.arrow.vector.ipc.message.ArrowFieldNode;
 import org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
 import org.apache.arrow.vector.ipc.message.MessageChannelReader;
@@ -33,8 +32,6 @@ import org.apache.arrow.vector.ipc.message.MessageResult;
 import org.apache.arrow.vector.ipc.message.MessageSerializer;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.apache.arrow.vector.util.ByteArrayReadableSeekableByteChannel;
-
-import io.netty.buffer.ArrowBuf;
 
 /**
  * Orc stripe that load data into ArrowRecordBatch.
@@ -68,9 +65,8 @@ public class OrcStripeReader extends ArrowReader {
       buffers.add(new ArrowBuf(
               new OrcReferenceManager(buffer),
               null,
-              (int)buffer.getSize(),
-              buffer.getMemoryAddress(),
-              false));
+              (int) buffer.getSize(),
+              buffer.getMemoryAddress()));
     }
 
     loadRecordBatch(new ArrowRecordBatch(
@@ -107,16 +103,7 @@ public class OrcStripeReader extends ArrowReader {
         throw new IOException("Unexpected end of input. Missing schema.");
       }
 
-      if (result.getMessage().headerType() != MessageHeader.Schema) {
-        throw new IOException("Expected schema but header was " + result.getMessage().headerType());
-      }
-
       return MessageSerializer.deserializeSchema(result.getMessage());
     }
-  }
-
-  @Override
-  protected ArrowDictionaryBatch readDictionary() throws IOException {
-    throw new UnsupportedOperationException();
   }
 }

@@ -20,7 +20,7 @@ package org.apache.arrow.vector;
 /**
  * Interface vectors that contain variable width members (e.g. Strings, Lists, etc).
  */
-public interface VariableWidthVector extends ValueVector, DensityAwareVector {
+public interface VariableWidthVector extends ElementAddressableVector, DensityAwareVector {
 
   /**
    * Allocate a new memory space for this vector.  Must be called prior to using the ValueVector.
@@ -28,7 +28,15 @@ public interface VariableWidthVector extends ValueVector, DensityAwareVector {
    * @param totalBytes Desired size of the underlying data buffer.
    * @param valueCount Number of values in the vector.
    */
-  void allocateNew(int totalBytes, int valueCount);
+  void allocateNew(long totalBytes, int valueCount);
+
+  /**
+   * Allocate a new memory space for this vector.  Must be called prior to using the ValueVector.
+   * The initial size in bytes is either default (or) reused from previous allocation
+   *
+   * @param valueCount Number of values in the vector.
+   */
+  void allocateNew(int valueCount);
 
   /**
    * Provide the maximum amount of variable width bytes that can be stored in this vector.

@@ -23,15 +23,20 @@ import java.nio.channels.Channels;
 import java.nio.channels.ReadableByteChannel;
 
 import org.apache.arrow.flatbuf.MessageHeader;
+import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.memory.BufferAllocator;
+import org.apache.arrow.vector.FieldVector;
+import org.apache.arrow.vector.compression.CompressionCodec;
+import org.apache.arrow.vector.compression.NoCompressionCodec;
 import org.apache.arrow.vector.ipc.message.ArrowDictionaryBatch;
 import org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
 import org.apache.arrow.vector.ipc.message.MessageChannelReader;
 import org.apache.arrow.vector.ipc.message.MessageResult;
 import org.apache.arrow.vector.ipc.message.MessageSerializer;
+import org.apache.arrow.vector.types.MetadataVersion;
+import org.apache.arrow.vector.types.pojo.DictionaryEncoding;
 import org.apache.arrow.vector.types.pojo.Schema;
-
-import io.netty.buffer.ArrowBuf;
+import org.apache.arrow.vector.validate.MetadataV4UnionChecker;
 
 /**
  * This class reads from an input stream and produces ArrowRecordBatches.
@@ -40,6 +45,21 @@ public class ArrowStreamReader extends ArrowReader {
 
   private MessageChannelReader messageReader;
 
+  private int loadedDictionaryCount;
+
+  /**
+   * Constructs a streaming reader using a MessageChannelReader. Non-blocking.
+   *
+   * @param messageReader reader used to get messages from a ReadChannel
+   * @param allocator to allocate new buffers
+   * @param compressionFactory the factory to create compression codec.
+   */
+  public ArrowStreamReader(
+      MessageChannelReader messageReader, BufferAllocator allocator, CompressionCodec.Factory compressionFactory) {
+    super(allocator, compressionFactory);
+    this.messageReader = messageReader;
+  }
+
   /**
    * Constructs a streaming reader using a MessageChannelReader. Non-blocking.
    *
@@ -47,8 +67,19 @@ public class ArrowStreamReader extends ArrowReader {
    * @param allocator to allocate new buffers
    */
   public ArrowStreamReader(MessageChannelReader messageReader, BufferAllocator allocator) {
-    super(allocator);
-    this.messageReader = messageReader;
+    this(messageReader, allocator, NoCompressionCodec.Factory.INSTANCE);
+  }
+
+  /**
+   * Constructs a streaming reader from a ReadableByteChannel input. Non-blocking.
+   *
+   * @param in ReadableByteChannel to read messages from
+   * @param allocator to allocate new buffers
+   * @param compressionFactory the factory to create compression codec.
+   */
+  public ArrowStreamReader(
+      ReadableByteChannel in, BufferAllocator allocator, CompressionCodec.Factory compressionFactory) {
+    this(new MessageChannelReader(new ReadChannel(in), allocator), allocator, compressionFactory);
   }
 
   /**
@@ -59,6 +90,18 @@ public class ArrowStreamReader extends ArrowReader {
    */
   public ArrowStreamReader(ReadableByteChannel in, BufferAllocator allocator) {
     this(new MessageChannelReader(new ReadChannel(in), allocator), allocator);
+  }
+
+  /**
+   * Constructs a streaming reader from a ReadableByteChannel input. Non-blocking.
+   *
+   * @param in InputStream to read messages from
+   * @param allocator to allocate new buffers
+   * @param compressionFactory the factory to create compression codec.
+   */
+  public ArrowStreamReader(
+      InputStream in, BufferAllocator allocator, CompressionCodec.Factory compressionFactory) {
+    this(Channels.newChannel(in), allocator, compressionFactory);
   }
 
   /**
@@ -106,20 +149,47 @@ public class ArrowStreamReader extends ArrowReader {
       return false;
     }
 
-    if (result.getMessage().headerType() != MessageHeader.RecordBatch) {
-      throw new IOException("Expected RecordBatch but header was " + result.getMessage().headerType());
+    if (result.getMessage().headerType() == MessageHeader.RecordBatch) {
+      ArrowBuf bodyBuffer = result.getBodyBuffer();
+
+      // For zero-length batches, need an empty buffer to deserialize the batch
+      if (bodyBuffer == null) {
+        bodyBuffer = allocator.getEmpty();
+      }
+
+      ArrowRecordBatch batch = MessageSerializer.deserializeRecordBatch(result.getMessage(), bodyBuffer);
+      loadRecordBatch(batch);
+      checkDictionaries();
+      return true;
+    } else if (result.getMessage().headerType() == MessageHeader.DictionaryBatch) {
+      // if it's dictionary message, read dictionary message out and continue to read unless get a batch or eos.
+      ArrowDictionaryBatch dictionaryBatch = readDictionary(result);
+      loadDictionary(dictionaryBatch);
+      loadedDictionaryCount++;
+      return loadNextBatch();
+    } else {
+      throw new IOException("Expected RecordBatch or DictionaryBatch but header was " +
+          result.getMessage().headerType());
     }
+  }
 
-    ArrowBuf bodyBuffer = result.getBodyBuffer();
-
-    // For zero-length batches, need an empty buffer to deserialize the batch
-    if (bodyBuffer == null) {
-      bodyBuffer = allocator.getEmpty();
+  /**
+   * When read a record batch, check whether its dictionaries are available.
+   */
+  private void checkDictionaries() throws IOException {
+    // if all dictionaries are loaded, return.
+    if (loadedDictionaryCount == dictionaries.size()) {
+      return;
     }
-
-    ArrowRecordBatch batch = MessageSerializer.deserializeRecordBatch(result.getMessage(), bodyBuffer);
-    loadRecordBatch(batch);
-    return true;
+    for (FieldVector vector : getVectorSchemaRoot().getFieldVectors()) {
+      DictionaryEncoding encoding = vector.getField().getDictionary();
+      if (encoding != null) {
+        // if the dictionaries it needs is not available and the vector is not all null, something was wrong.
+        if (!dictionaries.containsKey(encoding.getId()) && vector.getNullCount() < vector.getValueCount()) {
+          throw new IOException("The dictionary was not available, id was:" + encoding.getId());
+        }
+      }
+    }
   }
 
   /**
@@ -139,27 +209,13 @@ public class ArrowStreamReader extends ArrowReader {
       throw new IOException("Expected schema but header was " + result.getMessage().headerType());
     }
 
-    return MessageSerializer.deserializeSchema(result.getMessage());
+    final Schema schema = MessageSerializer.deserializeSchema(result.getMessage());
+    MetadataV4UnionChecker.checkRead(schema, MetadataVersion.fromFlatbufID(result.getMessage().version()));
+    return schema;
   }
 
-  /**
-   * Read a dictionary batch message, will be invoked after the schema and before normal record
-   * batches are read.
-   *
-   * @return the deserialized dictionary batch
-   * @throws IOException on error
-   */
-  @Override
-  protected ArrowDictionaryBatch readDictionary() throws IOException {
-    MessageResult result = messageReader.readNext();
 
-    if (result == null) {
-      throw new IOException("Unexpected end of input. Expected DictionaryBatch");
-    }
-
-    if (result.getMessage().headerType() != MessageHeader.DictionaryBatch) {
-      throw new IOException("Expected DictionaryBatch but header was " + result.getMessage().headerType());
-    }
+  private ArrowDictionaryBatch readDictionary(MessageResult result) throws IOException {
 
     ArrowBuf bodyBuffer = result.getBodyBuffer();
 

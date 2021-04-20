@@ -17,11 +17,12 @@
 
 package org.apache.arrow.algorithm.sort;
 
+import org.apache.arrow.memory.ArrowBuf;
+import org.apache.arrow.util.Preconditions;
 import org.apache.arrow.vector.BaseVariableWidthVector;
 import org.apache.arrow.vector.BitVectorHelper;
 import org.apache.arrow.vector.IntVector;
 
-import io.netty.buffer.ArrowBuf;
 import io.netty.util.internal.PlatformDependent;
 
 /**
@@ -45,6 +46,22 @@ public class VariableWidthOutOfPlaceVectorSorter<V extends BaseVariableWidthVect
     ArrowBuf dstValueBuffer = dstVector.getDataBuffer();
     ArrowBuf dstOffsetBuffer = dstVector.getOffsetBuffer();
 
+    // check buffer size
+    Preconditions.checkArgument(dstValidityBuffer.capacity() * 8 >= srcVector.getValueCount(),
+        "Not enough capacity for the validity buffer of the dst vector. " +
+            "Expected capacity %s, actual capacity %s",
+        (srcVector.getValueCount() + 7) / 8, dstValidityBuffer.capacity());
+    Preconditions.checkArgument(
+        dstOffsetBuffer.capacity() >= (srcVector.getValueCount() + 1) * BaseVariableWidthVector.OFFSET_WIDTH,
+        "Not enough capacity for the offset buffer of the dst vector. " +
+            "Expected capacity %s, actual capacity %s",
+        (srcVector.getValueCount() + 1) * BaseVariableWidthVector.OFFSET_WIDTH, dstOffsetBuffer.capacity());
+    long dataSize = srcVector.getOffsetBuffer().getInt(
+        srcVector.getValueCount() * BaseVariableWidthVector.OFFSET_WIDTH);
+    Preconditions.checkArgument(
+        dstValueBuffer.capacity() >= dataSize, "No enough capacity for the data buffer of the dst vector. " +
+            "Expected capacity %s, actual capacity %s", dataSize, dstValueBuffer.capacity());
+
     // sort value indices
     try (IntVector sortedIndices = new IntVector("", srcVector.getAllocator())) {
       sortedIndices.allocateNew(srcVector.getValueCount());
@@ -58,9 +75,9 @@ public class VariableWidthOutOfPlaceVectorSorter<V extends BaseVariableWidthVect
       for (int dstIndex = 0; dstIndex < sortedIndices.getValueCount(); dstIndex++) {
         int srcIndex = sortedIndices.get(dstIndex);
         if (srcVector.isNull(srcIndex)) {
-          BitVectorHelper.setValidityBit(dstValidityBuffer, dstIndex, 0);
+          BitVectorHelper.unsetBit(dstValidityBuffer, dstIndex);
         } else {
-          BitVectorHelper.setValidityBit(dstValidityBuffer, dstIndex, 1);
+          BitVectorHelper.setBit(dstValidityBuffer, dstIndex);
           int srcOffset = srcOffsetBuffer.getInt(srcIndex * BaseVariableWidthVector.OFFSET_WIDTH);
           int valueLength = srcOffsetBuffer.getInt((srcIndex + 1) * BaseVariableWidthVector.OFFSET_WIDTH) - srcOffset;
           PlatformDependent.copyMemory(

@@ -28,6 +28,7 @@ import org.apache.arrow.gandiva.expression.Condition;
 import org.apache.arrow.gandiva.expression.ExpressionTree;
 import org.apache.arrow.gandiva.expression.TreeBuilder;
 import org.apache.arrow.gandiva.ipc.GandivaTypes.SelectionVectorType;
+import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.ValueVector;
 import org.apache.arrow.vector.ipc.message.ArrowFieldNode;
@@ -37,8 +38,6 @@ import org.apache.arrow.vector.types.pojo.Schema;
 import org.junit.Test;
 
 import com.google.common.collect.Lists;
-
-import io.netty.buffer.ArrowBuf;
 
 public class FilterProjectTest extends BaseEvaluatorTest {
 
@@ -60,8 +59,8 @@ public class FilterProjectTest extends BaseEvaluatorTest {
     int numRows = 16;
     byte[] validity = new byte[]{(byte) 255, 0};
     // second half is "undefined"
-    int[] aValues = new int[]{1, 2, 3, 4, 5, 6, 7, 8,  9, 10, 11, 12, 13, 14, 15, 16};
-    int[] bValues = new int[]{2, 1, 4, 3, 6, 5, 8, 7, 10,  9, 12, 11, 14, 13, 14, 15};
+    int[] aValues = new int[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+    int[] bValues = new int[]{2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 14, 15};
     int[] expected = {3, 7, 11, 15};
 
     verifyTestCaseFor16(filter, projector, numRows, validity, aValues, bValues, expected);

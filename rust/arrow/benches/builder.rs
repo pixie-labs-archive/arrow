@@ -23,9 +23,10 @@ use std::mem::size_of;
 
 use criterion::*;
 use rand::distributions::Standard;
-use rand::{thread_rng, Rng};
 
 use arrow::array::*;
+use arrow::util::test_util::seedable_rng;
+use rand::Rng;
 
 // Build arrays with 512k elements.
 const BATCH_SIZE: usize = 8 << 10;
@@ -33,45 +34,83 @@ const NUM_BATCHES: usize = 64;
 
 fn bench_primitive(c: &mut Criterion) {
     let data: [i64; BATCH_SIZE] = [100; BATCH_SIZE];
-    c.bench(
-        "bench_primitive",
-        Benchmark::new("bench_primitive", move |b| {
-            b.iter(|| {
-                let mut builder = Int64Builder::new(64);
-                for _ in 0..NUM_BATCHES {
-                    let _ = black_box(builder.append_slice(&data[..]));
-                }
-                black_box(builder.finish());
-            })
+
+    let mut group = c.benchmark_group("bench_primitive");
+    group.throughput(Throughput::Bytes(
+        ((data.len() * NUM_BATCHES * size_of::<i64>()) as u32).into(),
+    ));
+    group.bench_function("bench_primitive", |b| {
+        b.iter(|| {
+            let mut builder = Int64Builder::new(64);
+            for _ in 0..NUM_BATCHES {
+                let _ = black_box(builder.append_slice(&data[..]));
+            }
+            black_box(builder.finish());
         })
-        .throughput(Throughput::Bytes(
-            (data.len() * NUM_BATCHES * size_of::<i64>()) as u32,
-        )),
-    );
+    });
+    group.finish();
+}
+
+fn bench_primitive_nulls(c: &mut Criterion) {
+    let mut group = c.benchmark_group("bench_primitive_nulls");
+    group.bench_function("bench_primitive_nulls", |b| {
+        b.iter(|| {
+            let mut builder = UInt8Builder::new(64);
+            for _ in 0..NUM_BATCHES * BATCH_SIZE {
+                let _ = black_box(builder.append_null());
+            }
+            black_box(builder.finish());
+        })
+    });
+    group.finish();
 }
 
 fn bench_bool(c: &mut Criterion) {
-    let data: Vec<bool> = thread_rng()
+    let data: Vec<bool> = seedable_rng()
         .sample_iter(&Standard)
         .take(BATCH_SIZE)
         .collect();
     let data_len = data.len();
-    c.bench(
-        "bench_bool",
-        Benchmark::new("bench_bool", move |b| {
-            b.iter(|| {
-                let mut builder = BooleanBuilder::new(64);
-                for _ in 0..NUM_BATCHES {
-                    let _ = black_box(builder.append_slice(&data[..]));
-                }
-                black_box(builder.finish());
-            })
+
+    let mut group = c.benchmark_group("bench_bool");
+    group.throughput(Throughput::Bytes(
+        ((data_len * NUM_BATCHES * size_of::<bool>()) as u32).into(),
+    ));
+    group.bench_function("bench_bool", |b| {
+        b.iter(|| {
+            let mut builder = BooleanBuilder::new(64);
+            for _ in 0..NUM_BATCHES {
+                let _ = black_box(builder.append_slice(&data[..]));
+            }
+            black_box(builder.finish());
         })
-        .throughput(Throughput::Bytes(
-            (data_len * NUM_BATCHES * size_of::<bool>()) as u32,
-        )),
-    );
+    });
+    group.finish();
 }
 
-criterion_group!(benches, bench_primitive, bench_bool);
+fn bench_string(c: &mut Criterion) {
+    const SAMPLE_STRING: &str = "sample string";
+    let mut group = c.benchmark_group("bench_primitive");
+    group.throughput(Throughput::Bytes(
+        ((BATCH_SIZE * NUM_BATCHES * SAMPLE_STRING.len()) as u32).into(),
+    ));
+    group.bench_function("bench_string", |b| {
+        b.iter(|| {
+            let mut builder = StringBuilder::new(64);
+            for _ in 0..NUM_BATCHES * BATCH_SIZE {
+                let _ = black_box(builder.append_value(SAMPLE_STRING));
+            }
+            black_box(builder.finish());
+        })
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_primitive,
+    bench_primitive_nulls,
+    bench_bool,
+    bench_string
+);
 criterion_main!(benches);

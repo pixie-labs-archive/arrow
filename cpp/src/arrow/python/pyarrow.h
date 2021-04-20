@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#ifndef ARROW_PYTHON_PYARROW_H
-#define ARROW_PYTHON_PYARROW_H
+#pragma once
 
 #include "arrow/python/platform.h"
 
@@ -25,6 +24,9 @@
 #include "arrow/python/visibility.h"
 
 #include "arrow/sparse_tensor.h"
+
+// Work around ARROW-2317 (C linkage warning from Cython)
+extern "C++" {
 
 namespace arrow {
 
@@ -43,52 +45,36 @@ namespace py {
 // Returns 0 on success, -1 on error.
 ARROW_PYTHON_EXPORT int import_pyarrow();
 
-ARROW_PYTHON_EXPORT bool is_buffer(PyObject* buffer);
-ARROW_PYTHON_EXPORT Status unwrap_buffer(PyObject* buffer, std::shared_ptr<Buffer>* out);
-ARROW_PYTHON_EXPORT PyObject* wrap_buffer(const std::shared_ptr<Buffer>& buffer);
+#define DECLARE_WRAP_FUNCTIONS(FUNC_SUFFIX, TYPE_NAME)                                 \
+  ARROW_PYTHON_EXPORT bool is_##FUNC_SUFFIX(PyObject*);                                \
+  ARROW_PYTHON_EXPORT Result<std::shared_ptr<TYPE_NAME>> unwrap_##FUNC_SUFFIX(         \
+      PyObject*);                                                                      \
+  ARROW_PYTHON_EXPORT PyObject* wrap_##FUNC_SUFFIX(const std::shared_ptr<TYPE_NAME>&); \
+  ARROW_DEPRECATED("Use Result-returning version")                                     \
+  ARROW_PYTHON_EXPORT Status unwrap_##FUNC_SUFFIX(PyObject*,                           \
+                                                  std::shared_ptr<TYPE_NAME>* out);
 
-ARROW_PYTHON_EXPORT bool is_data_type(PyObject* data_type);
-ARROW_PYTHON_EXPORT Status unwrap_data_type(PyObject* data_type,
-                                            std::shared_ptr<DataType>* out);
-ARROW_PYTHON_EXPORT PyObject* wrap_data_type(const std::shared_ptr<DataType>& type);
+DECLARE_WRAP_FUNCTIONS(buffer, Buffer)
 
-ARROW_PYTHON_EXPORT bool is_field(PyObject* field);
-ARROW_PYTHON_EXPORT Status unwrap_field(PyObject* field, std::shared_ptr<Field>* out);
-ARROW_PYTHON_EXPORT PyObject* wrap_field(const std::shared_ptr<Field>& field);
+DECLARE_WRAP_FUNCTIONS(data_type, DataType)
+DECLARE_WRAP_FUNCTIONS(field, Field)
+DECLARE_WRAP_FUNCTIONS(schema, Schema)
 
-ARROW_PYTHON_EXPORT bool is_schema(PyObject* schema);
-ARROW_PYTHON_EXPORT Status unwrap_schema(PyObject* schema, std::shared_ptr<Schema>* out);
-ARROW_PYTHON_EXPORT PyObject* wrap_schema(const std::shared_ptr<Schema>& schema);
+DECLARE_WRAP_FUNCTIONS(scalar, Scalar)
 
-ARROW_PYTHON_EXPORT bool is_array(PyObject* array);
-ARROW_PYTHON_EXPORT Status unwrap_array(PyObject* array, std::shared_ptr<Array>* out);
-ARROW_PYTHON_EXPORT PyObject* wrap_array(const std::shared_ptr<Array>& array);
+DECLARE_WRAP_FUNCTIONS(array, Array)
+DECLARE_WRAP_FUNCTIONS(chunked_array, ChunkedArray)
 
-ARROW_PYTHON_EXPORT bool is_tensor(PyObject* tensor);
-ARROW_PYTHON_EXPORT Status unwrap_tensor(PyObject* tensor, std::shared_ptr<Tensor>* out);
-ARROW_PYTHON_EXPORT PyObject* wrap_tensor(const std::shared_ptr<Tensor>& tensor);
+DECLARE_WRAP_FUNCTIONS(sparse_coo_tensor, SparseCOOTensor)
+DECLARE_WRAP_FUNCTIONS(sparse_csc_matrix, SparseCSCMatrix)
+DECLARE_WRAP_FUNCTIONS(sparse_csf_tensor, SparseCSFTensor)
+DECLARE_WRAP_FUNCTIONS(sparse_csr_matrix, SparseCSRMatrix)
+DECLARE_WRAP_FUNCTIONS(tensor, Tensor)
 
-ARROW_PYTHON_EXPORT bool is_sparse_tensor_coo(PyObject* sparse_tensor);
-ARROW_PYTHON_EXPORT Status
-unwrap_sparse_tensor_coo(PyObject* sparse_tensor, std::shared_ptr<SparseTensorCOO>* out);
-ARROW_PYTHON_EXPORT PyObject* wrap_sparse_tensor_coo(
-    const std::shared_ptr<SparseTensorCOO>& sparse_tensor);
+DECLARE_WRAP_FUNCTIONS(batch, RecordBatch)
+DECLARE_WRAP_FUNCTIONS(table, Table)
 
-ARROW_PYTHON_EXPORT bool is_sparse_tensor_csr(PyObject* sparse_tensor);
-ARROW_PYTHON_EXPORT Status
-unwrap_sparse_tensor_csr(PyObject* sparse_tensor, std::shared_ptr<SparseTensorCSR>* out);
-ARROW_PYTHON_EXPORT PyObject* wrap_sparse_tensor_csr(
-    const std::shared_ptr<SparseTensorCSR>& sparse_tensor);
-
-ARROW_PYTHON_EXPORT bool is_table(PyObject* table);
-ARROW_PYTHON_EXPORT Status unwrap_table(PyObject* table, std::shared_ptr<Table>* out);
-ARROW_PYTHON_EXPORT PyObject* wrap_table(const std::shared_ptr<Table>& table);
-
-ARROW_PYTHON_EXPORT bool is_record_batch(PyObject* batch);
-ARROW_PYTHON_EXPORT Status unwrap_record_batch(PyObject* batch,
-                                               std::shared_ptr<RecordBatch>* out);
-ARROW_PYTHON_EXPORT PyObject* wrap_record_batch(
-    const std::shared_ptr<RecordBatch>& batch);
+#undef DECLARE_WRAP_FUNCTIONS
 
 namespace internal {
 
@@ -98,4 +84,4 @@ ARROW_PYTHON_EXPORT int check_status(const Status& status);
 }  // namespace py
 }  // namespace arrow
 
-#endif  // ARROW_PYTHON_PYARROW_H
+}  // extern "C++"

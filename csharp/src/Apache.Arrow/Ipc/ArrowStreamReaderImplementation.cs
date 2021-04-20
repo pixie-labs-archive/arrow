@@ -59,18 +59,8 @@ namespace Apache.Arrow.Ipc
         {
             await ReadSchemaAsync().ConfigureAwait(false);
 
-            int messageLength = 0;
-            await ArrayPool<byte>.Shared.RentReturnAsync(4, async (lengthBuffer) =>
-            {
-                // Get Length of record batch for message header.
-                int bytesRead = await BaseStream.ReadFullBufferAsync(lengthBuffer, cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (bytesRead == 4)
-                {
-                    messageLength = BitUtility.ReadInt32(lengthBuffer);
-                }
-            }).ConfigureAwait(false);
+            int messageLength = await ReadMessageLengthAsync(throwOnFullRead: false, cancellationToken)
+                .ConfigureAwait(false);
 
             if (messageLength == 0)
             {
@@ -90,7 +80,7 @@ namespace Apache.Arrow.Ipc
                 int bodyLength = checked((int)message.BodyLength);
 
                 IMemoryOwner<byte> bodyBuffOwner = _allocator.Allocate(bodyLength);
-                Memory<byte> bodyBuff = bodyBuffOwner?.Memory.Slice(0, bodyLength) ?? Memory<byte>.Empty;
+                Memory<byte> bodyBuff = bodyBuffOwner.Memory.Slice(0, bodyLength);
                 bytesRead = await BaseStream.ReadFullBufferAsync(bodyBuff, cancellationToken)
                     .ConfigureAwait(false);
                 EnsureFullRead(bodyBuff, bytesRead);
@@ -106,16 +96,7 @@ namespace Apache.Arrow.Ipc
         {
             ReadSchema();
 
-            int messageLength = 0;
-            ArrayPool<byte>.Shared.RentReturn(4, lengthBuffer =>
-            {
-                int bytesRead = BaseStream.ReadFullBuffer(lengthBuffer);
-
-                if (bytesRead == 4)
-                {
-                    messageLength = BitUtility.ReadInt32(lengthBuffer);
-                }
-            });
+            int messageLength = ReadMessageLength(throwOnFullRead: false);
 
             if (messageLength == 0)
             {
@@ -134,7 +115,7 @@ namespace Apache.Arrow.Ipc
                 int bodyLength = checked((int)message.BodyLength);
 
                 IMemoryOwner<byte> bodyBuffOwner = _allocator.Allocate(bodyLength);
-                Memory<byte> bodyBuff = bodyBuffOwner?.Memory.Slice(0, bodyLength) ?? Memory<byte>.Empty;
+                Memory<byte> bodyBuff = bodyBuffOwner.Memory.Slice(0, bodyLength);
                 bytesRead = BaseStream.ReadFullBuffer(bodyBuff);
                 EnsureFullRead(bodyBuff, bytesRead);
 
@@ -153,14 +134,8 @@ namespace Apache.Arrow.Ipc
             }
 
             // Figure out length of schema
-            int schemaMessageLength = 0;
-            await ArrayPool<byte>.Shared.RentReturnAsync(4, async (lengthBuffer) =>
-            {
-                int bytesRead = await BaseStream.ReadFullBufferAsync(lengthBuffer).ConfigureAwait(false);
-                EnsureFullRead(lengthBuffer, bytesRead);
-
-                schemaMessageLength = BitUtility.ReadInt32(lengthBuffer);
-            }).ConfigureAwait(false);
+            int schemaMessageLength = await ReadMessageLengthAsync(throwOnFullRead: true)
+                .ConfigureAwait(false);
 
             await ArrayPool<byte>.Shared.RentReturnAsync(schemaMessageLength, async (buff) =>
             {
@@ -168,7 +143,7 @@ namespace Apache.Arrow.Ipc
                 int bytesRead = await BaseStream.ReadFullBufferAsync(buff).ConfigureAwait(false);
                 EnsureFullRead(buff, bytesRead);
 
-                var schemabb = CreateByteBuffer(buff);
+                FlatBuffers.ByteBuffer schemabb = CreateByteBuffer(buff);
                 Schema = MessageSerializer.GetSchema(ReadMessage<Flatbuf.Schema>(schemabb));
             }).ConfigureAwait(false);
         }
@@ -181,23 +156,94 @@ namespace Apache.Arrow.Ipc
             }
 
             // Figure out length of schema
-            int schemaMessageLength = 0;
-            ArrayPool<byte>.Shared.RentReturn(4, lengthBuffer =>
-            {
-                int bytesRead = BaseStream.ReadFullBuffer(lengthBuffer);
-                EnsureFullRead(lengthBuffer, bytesRead);
-
-                schemaMessageLength = BitUtility.ReadInt32(lengthBuffer);
-            });
+            int schemaMessageLength = ReadMessageLength(throwOnFullRead: true);
 
             ArrayPool<byte>.Shared.RentReturn(schemaMessageLength, buff =>
             {
                 int bytesRead = BaseStream.ReadFullBuffer(buff);
                 EnsureFullRead(buff, bytesRead);
 
-                var schemabb = CreateByteBuffer(buff);
+                FlatBuffers.ByteBuffer schemabb = CreateByteBuffer(buff);
                 Schema = MessageSerializer.GetSchema(ReadMessage<Flatbuf.Schema>(schemabb));
             });
+        }
+
+        private async ValueTask<int> ReadMessageLengthAsync(bool throwOnFullRead, CancellationToken cancellationToken = default)
+        {
+            int messageLength = 0;
+            await ArrayPool<byte>.Shared.RentReturnAsync(4, async (lengthBuffer) =>
+            {
+                int bytesRead = await BaseStream.ReadFullBufferAsync(lengthBuffer, cancellationToken)
+                    .ConfigureAwait(false);
+                if (throwOnFullRead)
+                {
+                    EnsureFullRead(lengthBuffer, bytesRead);
+                }
+                else if (bytesRead != 4)
+                {
+                    return;
+                }
+
+                messageLength = BitUtility.ReadInt32(lengthBuffer);
+
+                // ARROW-6313, if the first 4 bytes are continuation message, read the next 4 for the length
+                if (messageLength == MessageSerializer.IpcContinuationToken)
+                {
+                    bytesRead = await BaseStream.ReadFullBufferAsync(lengthBuffer, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (throwOnFullRead)
+                    {
+                        EnsureFullRead(lengthBuffer, bytesRead);
+                    }
+                    else if (bytesRead != 4)
+                    {
+                        messageLength = 0;
+                        return;
+                    }
+
+                    messageLength = BitUtility.ReadInt32(lengthBuffer);
+                }
+            }).ConfigureAwait(false);
+
+            return messageLength;
+        }
+
+        private int ReadMessageLength(bool throwOnFullRead)
+        {
+            int messageLength = 0;
+            ArrayPool<byte>.Shared.RentReturn(4, lengthBuffer =>
+            {
+                int bytesRead = BaseStream.ReadFullBuffer(lengthBuffer);
+                if (throwOnFullRead)
+                {
+                    EnsureFullRead(lengthBuffer, bytesRead);
+                }
+                else if (bytesRead != 4)
+                {
+                    return;
+                }
+
+                messageLength = BitUtility.ReadInt32(lengthBuffer);
+
+                // ARROW-6313, if the first 4 bytes are continuation message, read the next 4 for the length
+                if (messageLength == MessageSerializer.IpcContinuationToken)
+                {
+                    bytesRead = BaseStream.ReadFullBuffer(lengthBuffer);
+                    if (throwOnFullRead)
+                    {
+                        EnsureFullRead(lengthBuffer, bytesRead);
+                    }
+                    else if (bytesRead != 4)
+                    {
+                        messageLength = 0;
+                        return;
+                    }
+
+                    messageLength = BitUtility.ReadInt32(lengthBuffer);
+                }
+            });
+
+            return messageLength;
         }
 
         /// <summary>

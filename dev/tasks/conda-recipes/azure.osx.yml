@@ -1,10 +1,13 @@
+{% import 'macros.jinja' as macros with context %}
+
 jobs:
 - job: osx
   pool:
-    vmImage: macOS-10.13
+    vmImage: macOS-10.14
   timeoutInMinutes: 360
   variables:
     CONFIG: {{ config }}
+    R_CONFIG: {{ r_config|default("") }}
     ARROW_VERSION: {{ arrow.no_rc_version }}
     UPLOAD_PACKAGES: False
   steps:
@@ -23,15 +26,10 @@ jobs:
 
   - script: |
       source activate base
-      conda install -n base -c conda-forge --quiet --yes conda-forge-ci-setup=2 conda-build
-    displayName: 'Add conda-forge-ci-setup=2'
+      conda install -n base -c conda-forge --quiet --yes conda-forge-ci-setup=3 conda-build
+    displayName: 'Add conda-forge-ci-setup=3'
 
-  - script: |
-      git clone --no-checkout {{ arrow.remote }} arrow
-      git -C arrow fetch -t {{ arrow.remote }} {{ arrow.branch }}
-      git -C arrow checkout FETCH_HEAD
-      git -C arrow submodule update --init --recursive
-    displayName: Clone arrow
+  {{ macros.azure_checkout_arrow() }}
 
   - script: |
       source activate base
@@ -41,16 +39,10 @@ jobs:
       export CI=azure
       source run_conda_forge_build_setup
       conda update --yes --quiet --override-channels -c conda-forge -c defaults --all
-      # ARROW-5738: OSX package builds are failing with missing intrinsics
-      #             Conda 4.7 has introduced a new format, probably broken
-      #             packages cause the error, so using a temporary solution:
-      #             pin `conda` to 4.6.
-      conda install --yes conda=4.6
     displayName: Configure conda and conda-build
     workingDirectory: arrow/dev/tasks/conda-recipes
-    env: {
+    env:
       OSX_FORCE_SDK_DOWNLOAD: "1"
-    }
 
   - script: |
       source activate base
@@ -66,26 +58,23 @@ jobs:
 
   - script: |
       source activate base
-      conda build arrow-cpp parquet-cpp pyarrow \
+      set +x
+      if [[ "${CONFIG}" == osx_arm* ]]; then
+        EXTRA_CB_OPTIONS="${EXTRA_CB_OPTIONS:-} --no-test"
+      fi
+      conda build arrow-cpp \
         -m ./.ci_support/${CONFIG}.yaml \
         --clobber-file ./.ci_support/clobber_${CONFIG}.yaml \
+        ${EXTRA_CB_OPTIONS:-} \
         --output-folder ./build_artifacts
+
+      if [ ! -z "${R_CONFIG}" ]; then
+        conda build r-arrow \
+          -m ./.ci_support/r/${R_CONFIG}.yaml \
+          --output-folder ./build_artifacts
+      fi
     workingDirectory: arrow/dev/tasks/conda-recipes
     displayName: Build recipes
 
-  # Using github release tries to find a common ancestor between the currently
-  # pushed tag and the latest tag of the github repository (don't know why).
-  # The tag upload took 43 minutes because of this scan, so use an alternative
-  # upload script.
-  - script: |
-      source activate base
-      conda install -c conda-forge -y github3.py click
-      python upload-assets.py \
-        --sha {{ task.branch }} \
-        --tag {{ task.tag }} \
-        --pattern "conda-recipes/build_artifacts/osx-64/*.tar.bz2"
-    env:
-      CROSSBOW_GITHUB_REPO: $(Build.Repository.Name)
-      CROSSBOW_GITHUB_TOKEN: $(CROSSBOW_GITHUB_TOKEN)
-    displayName: Upload packages as a GitHub release
-    workingDirectory: arrow/dev/tasks
+  {{ macros.azure_upload_releases("arrow/dev/tasks/conda-recipes/build_artifacts/osx-*/*.tar.bz2") }}
+  {{ macros.azure_upload_anaconda("arrow/dev/tasks/conda-recipes/build_artifacts/osx-*/*.tar.bz2") }}

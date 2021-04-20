@@ -20,25 +20,23 @@ package org.apache.arrow.consumers;
 import java.io.IOException;
 
 import org.apache.arrow.vector.IntVector;
-import org.apache.arrow.vector.complex.impl.IntWriterImpl;
-import org.apache.arrow.vector.complex.writer.IntWriter;
 import org.apache.avro.io.Decoder;
 
 /**
  * Consumer which consume int type values from avro decoder.
  * Write the data to {@link IntVector}.
  */
-public class AvroIntConsumer implements Consumer {
+public class AvroIntConsumer extends BaseAvroConsumer<IntVector> {
 
-  private final IntWriter writer;
-
+  /**
+   * Instantiate a AvroIntConsumer.
+   */
   public AvroIntConsumer(IntVector vector) {
-    this.writer = new IntWriterImpl(vector);
+    super(vector);
   }
 
   @Override
   public void consume(Decoder decoder) throws IOException {
-    writer.writeInt(decoder.readInt());
-    writer.setPosition(writer.getPosition() + 1);
+    vector.set(currentIndex++, decoder.readInt());
   }
 }

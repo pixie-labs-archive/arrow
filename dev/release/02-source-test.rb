@@ -53,17 +53,6 @@ class SourceTest < Test::Unit::TestCase
     end
   end
 
-  def test_glib_configure
-    source("GLIB")
-    Dir.chdir("#{@tag_name}/c_glib") do
-      assert_equal([
-                     "configure",
-                     "configure.ac",
-                   ],
-                   Dir.glob("configure*").sort)
-    end
-  end
-
   def test_csharp_git_commit_information
     source
     Dir.chdir("#{@tag_name}/csharp") do
@@ -93,7 +82,12 @@ class SourceTest < Test::Unit::TestCase
     source
     Dir.chdir("#{@tag_name}/python") do
       sh("python3", "setup.py", "sdist")
-      assert_equal(["dist/pyarrow-#{@release_version}a0.tar.gz"],
+      if on_release_branch?
+        pyarrow_source_archive = "dist/pyarrow-#{@release_version}.tar.gz"
+      else
+        pyarrow_source_archive = "dist/pyarrow-#{@release_version}a0.tar.gz"
+      end
+      assert_equal([pyarrow_source_archive],
                    Dir.glob("dist/pyarrow-*.tar.gz"))
     end
   end
@@ -107,7 +101,8 @@ class SourceTest < Test::Unit::TestCase
     ]
     jql = jql_conditions.join(" AND ")
     n_resolved_issues = nil
-    open("#{jira_url}/rest/api/2/search?jql=#{CGI.escape(jql)}") do |response|
+    search_url = URI("#{jira_url}/rest/api/2/search?jql=#{CGI.escape(jql)}")
+    search_url.open do |response|
       n_resolved_issues = JSON.parse(response.read)["total"]
     end
     output = source("VOTE")
@@ -118,7 +113,7 @@ Subject: [VOTE] Release Apache Arrow #{@release_version} - RC0
 Hi,
 
 I would like to propose the following release candidate (RC0) of Apache
-Arrow version #{@release_version}. This is a release consiting of #{n_resolved_issues}
+Arrow version #{@release_version}. This is a release consisting of #{n_resolved_issues}
 resolved JIRA issues[1].
 
 This release candidate is based on commit:

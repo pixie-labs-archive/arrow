@@ -20,7 +20,7 @@
 #pragma once
 
 #include <arrow-glib/array.h>
-#include <arrow-glib/decimal128.h>
+#include <arrow-glib/decimal.h>
 
 G_BEGIN_DECLS
 
@@ -41,9 +41,42 @@ GArrowDataType *
 garrow_array_builder_get_value_data_type(GArrowArrayBuilder *builder);
 GArrowType garrow_array_builder_get_value_type(GArrowArrayBuilder *builder);
 
-GArrowArray        *garrow_array_builder_finish   (GArrowArrayBuilder *builder,
-                                                   GError **error);
+GArrowArray *garrow_array_builder_finish(GArrowArrayBuilder *builder,
+                                         GError **error);
 
+GARROW_AVAILABLE_IN_2_0
+void garrow_array_builder_reset(GArrowArrayBuilder *builder);
+
+GARROW_AVAILABLE_IN_2_0
+gint64 garrow_array_builder_get_capacity(GArrowArrayBuilder *builder);
+GARROW_AVAILABLE_IN_2_0
+gint64 garrow_array_builder_get_length(GArrowArrayBuilder *builder);
+GARROW_AVAILABLE_IN_2_0
+gint64 garrow_array_builder_get_n_nulls(GArrowArrayBuilder *builder);
+
+GARROW_AVAILABLE_IN_2_0
+gboolean garrow_array_builder_resize(GArrowArrayBuilder *builder,
+                                     gint64 capacity,
+                                     GError **error);
+GARROW_AVAILABLE_IN_2_0
+gboolean garrow_array_builder_reserve(GArrowArrayBuilder *builder,
+                                      gint64 additional_capacity,
+                                      GError **error);
+
+GARROW_AVAILABLE_IN_3_0
+gboolean garrow_array_builder_append_null(GArrowArrayBuilder *builder,
+                                          GError **error);
+GARROW_AVAILABLE_IN_3_0
+gboolean garrow_array_builder_append_nulls(GArrowArrayBuilder *builder,
+                                           gint64 n,
+                                           GError **error);
+GARROW_AVAILABLE_IN_3_0
+gboolean garrow_array_builder_append_empty_value(GArrowArrayBuilder *builder,
+                                                 GError **error);
+GARROW_AVAILABLE_IN_3_0
+gboolean garrow_array_builder_append_empty_values(GArrowArrayBuilder *builder,
+                                                  gint64 n,
+                                                  GError **error);
 
 #define GARROW_TYPE_NULL_ARRAY_BUILDER (garrow_null_array_builder_get_type())
 G_DECLARE_DERIVABLE_TYPE(GArrowNullArrayBuilder,
@@ -59,13 +92,17 @@ struct _GArrowNullArrayBuilderClass
 GARROW_AVAILABLE_IN_0_13
 GArrowNullArrayBuilder *garrow_null_array_builder_new(void);
 
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
 GARROW_AVAILABLE_IN_0_13
 gboolean garrow_null_array_builder_append_null(GArrowNullArrayBuilder *builder,
                                                GError **error);
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_nulls)
 GARROW_AVAILABLE_IN_0_13
 gboolean garrow_null_array_builder_append_nulls(GArrowNullArrayBuilder *builder,
                                                 gint64 n,
                                                 GError **error);
+#endif
 
 
 #define GARROW_TYPE_BOOLEAN_ARRAY_BUILDER       \
@@ -98,11 +135,15 @@ gboolean garrow_boolean_array_builder_append_values(GArrowBooleanArrayBuilder *b
                                                     const gboolean *is_valids,
                                                     gint64 is_valids_length,
                                                     GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
 gboolean garrow_boolean_array_builder_append_null(GArrowBooleanArrayBuilder *builder,
                                                   GError **error);
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_nulls)
 gboolean garrow_boolean_array_builder_append_nulls(GArrowBooleanArrayBuilder *builder,
                                                    gint64 n,
                                                    GError **error);
+#endif
 
 
 #define GARROW_TYPE_INT_ARRAY_BUILDER (garrow_int_array_builder_get_type())
@@ -134,11 +175,15 @@ gboolean garrow_int_array_builder_append_values(GArrowIntArrayBuilder *builder,
                                                 const gboolean *is_valids,
                                                 gint64 is_valids_length,
                                                 GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
 gboolean garrow_int_array_builder_append_null(GArrowIntArrayBuilder *builder,
                                               GError **error);
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_nulls)
 gboolean garrow_int_array_builder_append_nulls(GArrowIntArrayBuilder *builder,
                                                gint64 n,
                                                GError **error);
+#endif
 
 
 #define GARROW_TYPE_UINT_ARRAY_BUILDER (garrow_uint_array_builder_get_type())
@@ -170,11 +215,15 @@ gboolean garrow_uint_array_builder_append_values(GArrowUIntArrayBuilder *builder
                                                  const gboolean *is_valids,
                                                  gint64 is_valids_length,
                                                  GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
 gboolean garrow_uint_array_builder_append_null(GArrowUIntArrayBuilder *builder,
                                                GError **error);
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_nulls)
 gboolean garrow_uint_array_builder_append_nulls(GArrowUIntArrayBuilder *builder,
                                                 gint64 n,
                                                 GError **error);
+#endif
 
 
 #define GARROW_TYPE_INT8_ARRAY_BUILDER (garrow_int8_array_builder_get_type())
@@ -206,11 +255,15 @@ gboolean garrow_int8_array_builder_append_values(GArrowInt8ArrayBuilder *builder
                                                  const gboolean *is_valids,
                                                  gint64 is_valids_length,
                                                  GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
 gboolean garrow_int8_array_builder_append_null(GArrowInt8ArrayBuilder *builder,
                                                GError **error);
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_nulls)
 gboolean garrow_int8_array_builder_append_nulls(GArrowInt8ArrayBuilder *builder,
                                                 gint64 n,
                                                 GError **error);
+#endif
 
 
 #define GARROW_TYPE_UINT8_ARRAY_BUILDER (garrow_uint8_array_builder_get_type())
@@ -242,11 +295,15 @@ gboolean garrow_uint8_array_builder_append_values(GArrowUInt8ArrayBuilder *build
                                                   const gboolean *is_valids,
                                                   gint64 is_valids_length,
                                                   GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
 gboolean garrow_uint8_array_builder_append_null(GArrowUInt8ArrayBuilder *builder,
                                                 GError **error);
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_nulls)
 gboolean garrow_uint8_array_builder_append_nulls(GArrowUInt8ArrayBuilder *builder,
                                                  gint64 n,
                                                  GError **error);
+#endif
 
 
 #define GARROW_TYPE_INT16_ARRAY_BUILDER (garrow_int16_array_builder_get_type())
@@ -278,11 +335,15 @@ gboolean garrow_int16_array_builder_append_values(GArrowInt16ArrayBuilder *build
                                                   const gboolean *is_valids,
                                                   gint64 is_valids_length,
                                                   GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
 gboolean garrow_int16_array_builder_append_null(GArrowInt16ArrayBuilder *builder,
                                                 GError **error);
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_nulls)
 gboolean garrow_int16_array_builder_append_nulls(GArrowInt16ArrayBuilder *builder,
                                                  gint64 n,
                                                  GError **error);
+#endif
 
 
 #define GARROW_TYPE_UINT16_ARRAY_BUILDER        \
@@ -315,11 +376,15 @@ gboolean garrow_uint16_array_builder_append_values(GArrowUInt16ArrayBuilder *bui
                                                    const gboolean *is_valids,
                                                    gint64 is_valids_length,
                                                    GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
 gboolean garrow_uint16_array_builder_append_null(GArrowUInt16ArrayBuilder *builder,
                                                  GError **error);
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_nulls)
 gboolean garrow_uint16_array_builder_append_nulls(GArrowUInt16ArrayBuilder *builder,
                                                   gint64 n,
                                                   GError **error);
+#endif
 
 
 #define GARROW_TYPE_INT32_ARRAY_BUILDER (garrow_int32_array_builder_get_type())
@@ -351,11 +416,15 @@ gboolean garrow_int32_array_builder_append_values(GArrowInt32ArrayBuilder *build
                                                   const gboolean *is_valids,
                                                   gint64 is_valids_length,
                                                   GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
 gboolean garrow_int32_array_builder_append_null(GArrowInt32ArrayBuilder *builder,
                                                 GError **error);
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_nulls)
 gboolean garrow_int32_array_builder_append_nulls(GArrowInt32ArrayBuilder *builder,
                                                  gint64 n,
                                                  GError **error);
+#endif
 
 
 #define GARROW_TYPE_UINT32_ARRAY_BUILDER        \
@@ -388,11 +457,15 @@ gboolean garrow_uint32_array_builder_append_values(GArrowUInt32ArrayBuilder *bui
                                                    const gboolean *is_valids,
                                                    gint64 is_valids_length,
                                                    GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
 gboolean garrow_uint32_array_builder_append_null(GArrowUInt32ArrayBuilder *builder,
                                                  GError **error);
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_nulls)
 gboolean garrow_uint32_array_builder_append_nulls(GArrowUInt32ArrayBuilder *builder,
                                                   gint64 n,
                                                   GError **error);
+#endif
 
 
 #define GARROW_TYPE_INT64_ARRAY_BUILDER (garrow_int64_array_builder_get_type())
@@ -424,11 +497,15 @@ gboolean garrow_int64_array_builder_append_values(GArrowInt64ArrayBuilder *build
                                                   const gboolean *is_valids,
                                                   gint64 is_valids_length,
                                                   GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
 gboolean garrow_int64_array_builder_append_null(GArrowInt64ArrayBuilder *builder,
                                                 GError **error);
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_nulls)
 gboolean garrow_int64_array_builder_append_nulls(GArrowInt64ArrayBuilder *builder,
                                                  gint64 n,
                                                  GError **error);
+#endif
 
 
 #define GARROW_TYPE_UINT64_ARRAY_BUILDER        \
@@ -461,11 +538,15 @@ gboolean garrow_uint64_array_builder_append_values(GArrowUInt64ArrayBuilder *bui
                                                    const gboolean *is_valids,
                                                    gint64 is_valids_length,
                                                    GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
 gboolean garrow_uint64_array_builder_append_null(GArrowUInt64ArrayBuilder *builder,
                                                  GError **error);
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_nulls)
 gboolean garrow_uint64_array_builder_append_nulls(GArrowUInt64ArrayBuilder *builder,
                                                   gint64 n,
                                                   GError **error);
+#endif
 
 
 #define GARROW_TYPE_FLOAT_ARRAY_BUILDER (garrow_float_array_builder_get_type())
@@ -497,11 +578,15 @@ gboolean garrow_float_array_builder_append_values(GArrowFloatArrayBuilder *build
                                                   const gboolean *is_valids,
                                                   gint64 is_valids_length,
                                                   GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
 gboolean garrow_float_array_builder_append_null(GArrowFloatArrayBuilder *builder,
                                                 GError **error);
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_nulls)
 gboolean garrow_float_array_builder_append_nulls(GArrowFloatArrayBuilder *builder,
                                                  gint64 n,
                                                  GError **error);
+#endif
 
 
 #define GARROW_TYPE_DOUBLE_ARRAY_BUILDER        \
@@ -534,11 +619,15 @@ gboolean garrow_double_array_builder_append_values(GArrowDoubleArrayBuilder *bui
                                                    const gboolean *is_valids,
                                                    gint64 is_valids_length,
                                                    GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
 gboolean garrow_double_array_builder_append_null(GArrowDoubleArrayBuilder *builder,
                                                  GError **error);
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_nulls)
 gboolean garrow_double_array_builder_append_nulls(GArrowDoubleArrayBuilder *builder,
                                                   gint64 n,
                                                   GError **error);
+#endif
 
 
 #define GARROW_TYPE_BINARY_ARRAY_BUILDER        \
@@ -567,8 +656,70 @@ gboolean garrow_binary_array_builder_append_value(GArrowBinaryArrayBuilder *buil
                                                   const guint8 *value,
                                                   gint32 length,
                                                   GError **error);
+GARROW_AVAILABLE_IN_0_16
+gboolean garrow_binary_array_builder_append_value_bytes(GArrowBinaryArrayBuilder *builder,
+                                                        GBytes *value,
+                                                        GError **error);
+GARROW_AVAILABLE_IN_0_16
+gboolean garrow_binary_array_builder_append_values(GArrowBinaryArrayBuilder *builder,
+                                                   GBytes **values,
+                                                   gint64 values_length,
+                                                   const gboolean *is_valids,
+                                                   gint64 is_valids_length,
+                                                   GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
 gboolean garrow_binary_array_builder_append_null(GArrowBinaryArrayBuilder *builder,
                                                  GError **error);
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_nulls)
+GARROW_AVAILABLE_IN_0_16
+gboolean garrow_binary_array_builder_append_nulls(GArrowBinaryArrayBuilder *builder,
+                                                  gint64 n,
+                                                  GError **error);
+#endif
+
+
+#define GARROW_TYPE_LARGE_BINARY_ARRAY_BUILDER        \
+  (garrow_large_binary_array_builder_get_type())
+G_DECLARE_DERIVABLE_TYPE(GArrowLargeBinaryArrayBuilder,
+                         garrow_large_binary_array_builder,
+                         GARROW,
+                         LARGE_BINARY_ARRAY_BUILDER,
+                         GArrowArrayBuilder)
+struct _GArrowLargeBinaryArrayBuilderClass
+{
+  GArrowArrayBuilderClass parent_class;
+};
+
+GARROW_AVAILABLE_IN_0_16
+GArrowLargeBinaryArrayBuilder *garrow_large_binary_array_builder_new(void);
+GARROW_AVAILABLE_IN_0_16
+gboolean garrow_large_binary_array_builder_append_value(GArrowLargeBinaryArrayBuilder *builder,
+                                                        const guint8 *value,
+                                                        gint64 length,
+                                                        GError **error);
+GARROW_AVAILABLE_IN_0_16
+gboolean garrow_large_binary_array_builder_append_value_bytes(GArrowLargeBinaryArrayBuilder *builder,
+                                                              GBytes *value,
+                                                              GError **error);
+GARROW_AVAILABLE_IN_0_16
+gboolean garrow_large_binary_array_builder_append_values(GArrowLargeBinaryArrayBuilder *builder,
+                                                         GBytes **values,
+                                                         gint64 values_length,
+                                                         const gboolean *is_valids,
+                                                         gint64 is_valids_length,
+                                                         GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
+GARROW_AVAILABLE_IN_0_16
+gboolean garrow_large_binary_array_builder_append_null(GArrowLargeBinaryArrayBuilder *builder,
+                                                       GError **error);
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_nulls)
+GARROW_AVAILABLE_IN_0_16
+gboolean garrow_large_binary_array_builder_append_nulls(GArrowLargeBinaryArrayBuilder *builder,
+                                                        gint64 n,
+                                                        GError **error);
+#endif
 
 
 #define GARROW_TYPE_STRING_ARRAY_BUILDER        \
@@ -591,17 +742,109 @@ gboolean garrow_string_array_builder_append(GArrowStringArrayBuilder *builder,
                                             const gchar *value,
                                             GError **error);
 #endif
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_0_16_FOR(garrow_string_array_builder_append_string)
 GARROW_AVAILABLE_IN_0_12
 gboolean garrow_string_array_builder_append_value(GArrowStringArrayBuilder *builder,
                                                   const gchar *value,
                                                   GError **error);
+#endif
+GARROW_AVAILABLE_IN_0_16
+gboolean garrow_string_array_builder_append_string(GArrowStringArrayBuilder *builder,
+                                                   const gchar *value,
+                                                   GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_0_16_FOR(garrow_string_array_builder_append_strings)
 gboolean garrow_string_array_builder_append_values(GArrowStringArrayBuilder *builder,
                                                    const gchar **values,
                                                    gint64 values_length,
                                                    const gboolean *is_valids,
                                                    gint64 is_valids_length,
                                                    GError **error);
+#endif
+GARROW_AVAILABLE_IN_0_16
+gboolean garrow_string_array_builder_append_strings(GArrowStringArrayBuilder *builder,
+                                                    const gchar **values,
+                                                    gint64 values_length,
+                                                    const gboolean *is_valids,
+                                                    gint64 is_valids_length,
+                                                    GError **error);
 
+
+#define GARROW_TYPE_LARGE_STRING_ARRAY_BUILDER        \
+  (garrow_large_string_array_builder_get_type())
+G_DECLARE_DERIVABLE_TYPE(GArrowLargeStringArrayBuilder,
+                         garrow_large_string_array_builder,
+                         GARROW,
+                         LARGE_STRING_ARRAY_BUILDER,
+                         GArrowLargeBinaryArrayBuilder)
+struct _GArrowLargeStringArrayBuilderClass
+{
+  GArrowLargeBinaryArrayBuilderClass parent_class;
+};
+
+GARROW_AVAILABLE_IN_0_16
+GArrowLargeStringArrayBuilder *garrow_large_string_array_builder_new(void);
+GARROW_AVAILABLE_IN_0_16
+gboolean garrow_large_string_array_builder_append_string(GArrowLargeStringArrayBuilder *builder,
+                                                         const gchar *value,
+                                                         GError **error);
+GARROW_AVAILABLE_IN_0_16
+gboolean garrow_large_string_array_builder_append_strings(GArrowLargeStringArrayBuilder *builder,
+                                                          const gchar **values,
+                                                          gint64 values_length,
+                                                          const gboolean *is_valids,
+                                                          gint64 is_valids_length,
+                                                          GError **error);
+
+
+#define GARROW_TYPE_FIXED_SIZE_BINARY_ARRAY_BUILDER      \
+  (garrow_fixed_size_binary_array_builder_get_type())
+G_DECLARE_DERIVABLE_TYPE(GArrowFixedSizeBinaryArrayBuilder,
+                         garrow_fixed_size_binary_array_builder,
+                         GARROW,
+                         FIXED_SIZE_BINARY_ARRAY_BUILDER,
+                         GArrowArrayBuilder)
+struct _GArrowFixedSizeBinaryArrayBuilderClass
+{
+  GArrowArrayBuilderClass parent_class;
+};
+
+GARROW_AVAILABLE_IN_3_0
+GArrowFixedSizeBinaryArrayBuilder *
+garrow_fixed_size_binary_array_builder_new(
+  GArrowFixedSizeBinaryDataType *data_type);
+
+GARROW_AVAILABLE_IN_3_0
+gboolean
+garrow_fixed_size_binary_array_builder_append_value(
+  GArrowFixedSizeBinaryArrayBuilder *builder,
+  const guint8 *value,
+  gint32 length,
+  GError **error);
+GARROW_AVAILABLE_IN_3_0
+gboolean
+garrow_fixed_size_binary_array_builder_append_value_bytes(
+  GArrowFixedSizeBinaryArrayBuilder *builder,
+  GBytes *value,
+  GError **error);
+GARROW_AVAILABLE_IN_3_0
+gboolean
+garrow_fixed_size_binary_array_builder_append_values(
+  GArrowFixedSizeBinaryArrayBuilder *builder,
+  GBytes **values,
+  gint64 values_length,
+  const gboolean *is_valids,
+  gint64 is_valids_length,
+  GError **error);
+GARROW_AVAILABLE_IN_3_0
+gboolean
+garrow_fixed_size_binary_array_builder_append_values_packed(
+  GArrowFixedSizeBinaryArrayBuilder *builder,
+  GBytes *values,
+  const gboolean *is_valids,
+  gint64 is_valids_length,
+  GError **error);
 
 #define GARROW_TYPE_DATE32_ARRAY_BUILDER        \
   (garrow_date32_array_builder_get_type())
@@ -633,11 +876,15 @@ gboolean garrow_date32_array_builder_append_values(GArrowDate32ArrayBuilder *bui
                                                    const gboolean *is_valids,
                                                    gint64 is_valids_length,
                                                    GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
 gboolean garrow_date32_array_builder_append_null(GArrowDate32ArrayBuilder *builder,
                                                  GError **error);
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_nulls)
 gboolean garrow_date32_array_builder_append_nulls(GArrowDate32ArrayBuilder *builder,
                                                   gint64 n,
                                                   GError **error);
+#endif
 
 
 #define GARROW_TYPE_DATE64_ARRAY_BUILDER        \
@@ -670,11 +917,15 @@ gboolean garrow_date64_array_builder_append_values(GArrowDate64ArrayBuilder *bui
                                                    const gboolean *is_valids,
                                                    gint64 is_valids_length,
                                                    GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
 gboolean garrow_date64_array_builder_append_null(GArrowDate64ArrayBuilder *builder,
                                                  GError **error);
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_nulls)
 gboolean garrow_date64_array_builder_append_nulls(GArrowDate64ArrayBuilder *builder,
                                                   gint64 n,
                                                   GError **error);
+#endif
 
 
 #define GARROW_TYPE_TIMESTAMP_ARRAY_BUILDER     \
@@ -708,11 +959,15 @@ gboolean garrow_timestamp_array_builder_append_values(GArrowTimestampArrayBuilde
                                                       const gboolean *is_valids,
                                                       gint64 is_valids_length,
                                                       GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
 gboolean garrow_timestamp_array_builder_append_null(GArrowTimestampArrayBuilder *builder,
                                                     GError **error);
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_nulls)
 gboolean garrow_timestamp_array_builder_append_nulls(GArrowTimestampArrayBuilder *builder,
                                                      gint64 n,
                                                      GError **error);
+#endif
 
 
 #define GARROW_TYPE_TIME32_ARRAY_BUILDER        \
@@ -745,11 +1000,15 @@ gboolean garrow_time32_array_builder_append_values(GArrowTime32ArrayBuilder *bui
                                                    const gboolean *is_valids,
                                                    gint64 is_valids_length,
                                                    GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
 gboolean garrow_time32_array_builder_append_null(GArrowTime32ArrayBuilder *builder,
                                                  GError **error);
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_nulls)
 gboolean garrow_time32_array_builder_append_nulls(GArrowTime32ArrayBuilder *builder,
                                                   gint64 n,
                                                   GError **error);
+#endif
 
 
 #define GARROW_TYPE_TIME64_ARRAY_BUILDER        \
@@ -782,11 +1041,137 @@ gboolean garrow_time64_array_builder_append_values(GArrowTime64ArrayBuilder *bui
                                                    const gboolean *is_valids,
                                                    gint64 is_valids_length,
                                                    GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
 gboolean garrow_time64_array_builder_append_null(GArrowTime64ArrayBuilder *builder,
                                                  GError **error);
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_nulls)
 gboolean garrow_time64_array_builder_append_nulls(GArrowTime64ArrayBuilder *builder,
                                                   gint64 n,
                                                   GError **error);
+#endif
+
+
+#define GARROW_TYPE_BINARY_DICTIONARY_ARRAY_BUILDER (garrow_binary_dictionary_array_builder_get_type())
+G_DECLARE_DERIVABLE_TYPE(GArrowBinaryDictionaryArrayBuilder,
+                         garrow_binary_dictionary_array_builder,
+                         GARROW,
+                         BINARY_DICTIONARY_ARRAY_BUILDER,
+                         GArrowArrayBuilder)
+struct _GArrowBinaryDictionaryArrayBuilderClass
+{
+  GArrowArrayBuilderClass parent_class;
+};
+
+GARROW_AVAILABLE_IN_2_0
+GArrowBinaryDictionaryArrayBuilder *
+garrow_binary_dictionary_array_builder_new(void);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
+GARROW_AVAILABLE_IN_2_0
+gboolean
+garrow_binary_dictionary_array_builder_append_null(GArrowBinaryDictionaryArrayBuilder *builder,
+                                                   GError **error);
+#endif
+GARROW_AVAILABLE_IN_2_0
+gboolean
+garrow_binary_dictionary_array_builder_append_value(GArrowBinaryDictionaryArrayBuilder *builder,
+                                                    const guint8 *value,
+                                                    gint32 length,
+                                                    GError **error);
+GARROW_AVAILABLE_IN_2_0
+gboolean
+garrow_binary_dictionary_array_builder_append_value_bytes(GArrowBinaryDictionaryArrayBuilder *builder,
+                                                          GBytes *value,
+                                                          GError **error);
+GARROW_AVAILABLE_IN_2_0
+gboolean
+garrow_binary_dictionary_array_builder_append_array(GArrowBinaryDictionaryArrayBuilder *builder,
+                                                    GArrowBinaryArray *array,
+                                                    GError **error);
+GARROW_AVAILABLE_IN_2_0
+gboolean
+garrow_binary_dictionary_array_builder_append_indices(GArrowBinaryDictionaryArrayBuilder *builder,
+                                                      const gint64 *values,
+                                                      gint64 values_length,
+                                                      const gboolean *is_valids,
+                                                      gint64 is_valids_length,
+                                                      GError **error);
+GARROW_AVAILABLE_IN_2_0
+gint64
+garrow_binary_dictionary_array_builder_get_dictionary_length(GArrowBinaryDictionaryArrayBuilder *builder);
+GARROW_AVAILABLE_IN_2_0
+gboolean
+garrow_binary_dictionary_array_builder_finish_delta(GArrowBinaryDictionaryArrayBuilder* builder,
+                                                    GArrowArray **out_indices,
+                                                    GArrowArray **out_delta,
+                                                    GError **error);
+GARROW_AVAILABLE_IN_2_0
+gboolean
+garrow_binary_dictionary_array_builder_insert_memo_values(GArrowBinaryDictionaryArrayBuilder *builder,
+                                                          GArrowBinaryArray *values,
+                                                          GError **error);
+GARROW_AVAILABLE_IN_2_0
+void
+garrow_binary_dictionary_array_builder_reset_full(GArrowBinaryDictionaryArrayBuilder *builder);
+
+
+#define GARROW_TYPE_STRING_DICTIONARY_ARRAY_BUILDER (garrow_string_dictionary_array_builder_get_type())
+G_DECLARE_DERIVABLE_TYPE(GArrowStringDictionaryArrayBuilder,
+                         garrow_string_dictionary_array_builder,
+                         GARROW,
+                         STRING_DICTIONARY_ARRAY_BUILDER,
+                         GArrowArrayBuilder)
+struct _GArrowStringDictionaryArrayBuilderClass
+{
+  GArrowArrayBuilderClass parent_class;
+};
+
+GARROW_AVAILABLE_IN_2_0
+GArrowStringDictionaryArrayBuilder *
+garrow_string_dictionary_array_builder_new(void);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
+GARROW_AVAILABLE_IN_2_0
+gboolean
+garrow_string_dictionary_array_builder_append_null(GArrowStringDictionaryArrayBuilder *builder,
+                                                   GError **error);
+#endif
+GARROW_AVAILABLE_IN_2_0
+gboolean
+garrow_string_dictionary_array_builder_append_string(GArrowStringDictionaryArrayBuilder *builder,
+                                                     const gchar *value,
+                                                     GError **error);
+GARROW_AVAILABLE_IN_2_0
+gboolean
+garrow_string_dictionary_array_builder_append_array(GArrowStringDictionaryArrayBuilder *builder,
+                                                    GArrowStringArray *array,
+                                                    GError **error);
+GARROW_AVAILABLE_IN_2_0
+gboolean
+garrow_string_dictionary_array_builder_append_indices(GArrowStringDictionaryArrayBuilder *builder,
+                                                      const gint64 *values,
+                                                      gint64 values_length,
+                                                      const gboolean *is_valids,
+                                                      gint64 is_valids_length,
+                                                      GError **error);
+GARROW_AVAILABLE_IN_2_0
+gint64
+garrow_string_dictionary_array_builder_get_dictionary_length(GArrowStringDictionaryArrayBuilder *builder);
+GARROW_AVAILABLE_IN_2_0
+gboolean
+garrow_string_dictionary_array_builder_finish_delta(GArrowStringDictionaryArrayBuilder* builder,
+                                                    GArrowArray **out_indices,
+                                                    GArrowArray **out_delta,
+                                                    GError **error);
+GARROW_AVAILABLE_IN_2_0
+gboolean
+garrow_string_dictionary_array_builder_insert_memo_values(GArrowStringDictionaryArrayBuilder *builder,
+                                                          GArrowStringArray *values,
+                                                          GError **error);
+GARROW_AVAILABLE_IN_2_0
+void
+garrow_string_dictionary_array_builder_reset_full(GArrowStringDictionaryArrayBuilder *builder);
 
 
 #define GARROW_TYPE_LIST_ARRAY_BUILDER (garrow_list_array_builder_get_type())
@@ -811,10 +1196,40 @@ gboolean garrow_list_array_builder_append(GArrowListArrayBuilder *builder,
 GARROW_AVAILABLE_IN_0_12
 gboolean garrow_list_array_builder_append_value(GArrowListArrayBuilder *builder,
                                                 GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
 gboolean garrow_list_array_builder_append_null(GArrowListArrayBuilder *builder,
                                                GError **error);
+#endif
 
 GArrowArrayBuilder *garrow_list_array_builder_get_value_builder(GArrowListArrayBuilder *builder);
+
+
+#define GARROW_TYPE_LARGE_LIST_ARRAY_BUILDER (garrow_large_list_array_builder_get_type())
+G_DECLARE_DERIVABLE_TYPE(GArrowLargeListArrayBuilder,
+                         garrow_large_list_array_builder,
+                         GARROW,
+                         LARGE_LIST_ARRAY_BUILDER,
+                         GArrowArrayBuilder)
+struct _GArrowLargeListArrayBuilderClass
+{
+  GArrowArrayBuilderClass parent_class;
+};
+
+GARROW_AVAILABLE_IN_0_16
+GArrowLargeListArrayBuilder *garrow_large_list_array_builder_new(GArrowLargeListDataType *data_type,
+                                                                 GError **error);
+GARROW_AVAILABLE_IN_0_16
+gboolean garrow_large_list_array_builder_append_value(GArrowLargeListArrayBuilder *builder,
+                                                      GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
+GARROW_AVAILABLE_IN_0_16
+gboolean garrow_large_list_array_builder_append_null(GArrowLargeListArrayBuilder *builder,
+                                                     GError **error);
+#endif
+GARROW_AVAILABLE_IN_0_16
+GArrowArrayBuilder *garrow_large_list_array_builder_get_value_builder(GArrowLargeListArrayBuilder *builder);
 
 
 #define GARROW_TYPE_STRUCT_ARRAY_BUILDER        \
@@ -840,12 +1255,66 @@ gboolean garrow_struct_array_builder_append(GArrowStructArrayBuilder *builder,
 GARROW_AVAILABLE_IN_0_12
 gboolean garrow_struct_array_builder_append_value(GArrowStructArrayBuilder *builder,
                                                   GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
 gboolean garrow_struct_array_builder_append_null(GArrowStructArrayBuilder *builder,
                                                  GError **error);
+#endif
 
 GArrowArrayBuilder *garrow_struct_array_builder_get_field_builder(GArrowStructArrayBuilder *builder,
                                                                   gint i);
 GList *garrow_struct_array_builder_get_field_builders(GArrowStructArrayBuilder *builder);
+
+
+#define GARROW_TYPE_MAP_ARRAY_BUILDER        \
+  (garrow_map_array_builder_get_type())
+G_DECLARE_DERIVABLE_TYPE(GArrowMapArrayBuilder,
+                         garrow_map_array_builder,
+                         GARROW,
+                         MAP_ARRAY_BUILDER,
+                         GArrowArrayBuilder)
+struct _GArrowMapArrayBuilderClass
+{
+  GArrowArrayBuilderClass parent_class;
+};
+
+GARROW_AVAILABLE_IN_0_17
+GArrowMapArrayBuilder *garrow_map_array_builder_new(GArrowMapDataType *data_type,
+                                                    GError **error);
+GARROW_AVAILABLE_IN_0_17
+gboolean
+garrow_map_array_builder_append_value(GArrowMapArrayBuilder *builder,
+                                      GError **error);
+GARROW_AVAILABLE_IN_0_17
+gboolean
+garrow_map_array_builder_append_values(GArrowMapArrayBuilder *builder,
+                                       const gint32 *offsets,
+                                       gint64 offsets_length,
+                                       const gboolean *is_valids,
+                                       gint64 is_valids_length,
+                                       GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
+GARROW_AVAILABLE_IN_0_17
+gboolean
+garrow_map_array_builder_append_null(GArrowMapArrayBuilder *builder,
+                                     GError **error);
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_nulls)
+GARROW_AVAILABLE_IN_0_17
+gboolean
+garrow_map_array_builder_append_nulls(GArrowMapArrayBuilder *builder,
+                                      gint64 n,
+                                      GError **error);
+#endif
+GARROW_AVAILABLE_IN_0_17
+GArrowArrayBuilder *
+garrow_map_array_builder_get_key_builder(GArrowMapArrayBuilder *builder);
+GARROW_AVAILABLE_IN_0_17
+GArrowArrayBuilder *
+garrow_map_array_builder_get_item_builder(GArrowMapArrayBuilder *builder);
+GARROW_AVAILABLE_IN_0_17
+GArrowArrayBuilder *
+garrow_map_array_builder_get_value_builder(GArrowMapArrayBuilder *builder);
 
 
 #define GARROW_TYPE_DECIMAL128_ARRAY_BUILDER (garrow_decimal128_array_builder_get_type())
@@ -853,10 +1322,10 @@ G_DECLARE_DERIVABLE_TYPE(GArrowDecimal128ArrayBuilder,
                          garrow_decimal128_array_builder,
                          GARROW,
                          DECIMAL128_ARRAY_BUILDER,
-                         GArrowArrayBuilder)
+                         GArrowFixedSizeBinaryArrayBuilder)
 struct _GArrowDecimal128ArrayBuilderClass
 {
-  GArrowArrayBuilderClass parent_class;
+  GArrowFixedSizeBinaryArrayBuilderClass parent_class;
 };
 
 GArrowDecimal128ArrayBuilder *garrow_decimal128_array_builder_new(GArrowDecimal128DataType *data_type);
@@ -871,8 +1340,48 @@ GARROW_AVAILABLE_IN_0_12
 gboolean garrow_decimal128_array_builder_append_value(GArrowDecimal128ArrayBuilder *builder,
                                                       GArrowDecimal128 *value,
                                                       GError **error);
+GARROW_AVAILABLE_IN_3_0
+gboolean
+garrow_decimal128_array_builder_append_values(
+  GArrowDecimal128ArrayBuilder *builder,
+  GArrowDecimal128 **values,
+  gint64 values_length,
+  const gboolean *is_valids,
+  gint64 is_valids_length,
+  GError **error);
+#ifndef GARROW_DISABLE_DEPRECATED
+GARROW_DEPRECATED_IN_3_0_FOR(garrow_array_builder_append_null)
 GARROW_AVAILABLE_IN_0_12
 gboolean garrow_decimal128_array_builder_append_null(GArrowDecimal128ArrayBuilder *builder,
                                                      GError **error);
+#endif
+
+
+#define GARROW_TYPE_DECIMAL256_ARRAY_BUILDER (garrow_decimal256_array_builder_get_type())
+G_DECLARE_DERIVABLE_TYPE(GArrowDecimal256ArrayBuilder,
+                         garrow_decimal256_array_builder,
+                         GARROW,
+                         DECIMAL256_ARRAY_BUILDER,
+                         GArrowFixedSizeBinaryArrayBuilder)
+struct _GArrowDecimal256ArrayBuilderClass
+{
+  GArrowFixedSizeBinaryArrayBuilderClass parent_class;
+};
+
+GArrowDecimal256ArrayBuilder *garrow_decimal256_array_builder_new(GArrowDecimal256DataType *data_type);
+
+GARROW_AVAILABLE_IN_3_0
+gboolean garrow_decimal256_array_builder_append_value(GArrowDecimal256ArrayBuilder *builder,
+                                                      GArrowDecimal256 *value,
+                                                      GError **error);
+GARROW_AVAILABLE_IN_3_0
+gboolean
+garrow_decimal256_array_builder_append_values(
+  GArrowDecimal256ArrayBuilder *builder,
+  GArrowDecimal256 **values,
+  gint64 values_length,
+  const gboolean *is_valids,
+  gint64 is_valids_length,
+  GError **error);
 
 G_END_DECLS

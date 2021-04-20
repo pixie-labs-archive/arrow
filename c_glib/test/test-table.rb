@@ -99,30 +99,28 @@ class TestTable < Test::Unit::TestCase
 
   sub_test_case("instance methods") do
     def setup
-      fields = [
+      @fields = [
         Arrow::Field.new("visible", Arrow::BooleanDataType.new),
         Arrow::Field.new("valid", Arrow::BooleanDataType.new),
       ]
-      schema = Arrow::Schema.new(fields)
-      columns = [
+      @schema = Arrow::Schema.new(@fields)
+      @columns = [
         build_boolean_array([true]),
         build_boolean_array([false]),
       ]
-      @table = Arrow::Table.new(schema, columns)
+      @table = Arrow::Table.new(@schema, @columns)
     end
 
     def test_equal
-      fields = [
-        Arrow::Field.new("visible", Arrow::BooleanDataType.new),
-        Arrow::Field.new("valid", Arrow::BooleanDataType.new),
-      ]
-      schema = Arrow::Schema.new(fields)
-      columns = [
-        build_boolean_array([true]),
-        build_boolean_array([false]),
-      ]
-      other_table = Arrow::Table.new(schema, columns)
+      other_table = Arrow::Table.new(@schema, @columns)
       assert_equal(@table, other_table)
+    end
+
+    def test_equal_metadata
+      other_table = Arrow::Table.new(@schema, @columns)
+      assert do
+        @table.equal_metadata(other_table, true)
+      end
     end
 
     def test_schema
@@ -208,6 +206,67 @@ valid:
         table = build_table("visible" => build_boolean_array(visibles))
         assert_equal(build_table("visible" => build_boolean_array([false, true])),
                      table.slice(-2, 2))
+      end
+    end
+
+    def test_combine_chunks
+      table = build_table(
+        "visible" => Arrow::ChunkedArray::new([build_boolean_array([true, false, true]),
+                                               build_boolean_array([false, true]),
+                                               build_boolean_array([false])])
+      )
+      combined_table = table.combine_chunks
+      all_values = combined_table.n_columns.times.collect do |i|
+        column = combined_table.get_column_data(i)
+        column.n_chunks.times.collect do |j|
+          column.get_chunk(j).values
+        end
+      end
+      assert_equal([[[true, false, true, false, true, false]]],
+                   all_values)
+    end
+
+    sub_test_case("#write_as_feather") do
+      def setup
+        super
+        @tempfile = Tempfile.open("arrow-table-write-as-feather")
+        begin
+          yield
+        ensure
+          @tempfile.close!
+        end
+      end
+
+      def read_feather
+        input = Arrow::MemoryMappedInputStream.new(@tempfile.path)
+        reader = Arrow::FeatherFileReader.new(input)
+        begin
+          yield(reader.read)
+        ensure
+          input.close
+        end
+      end
+
+      test("default") do
+        output = Arrow::FileOutputStream.new(@tempfile.path, false)
+        @table.write_as_feather(output)
+        output.close
+
+        read_feather do |read_table|
+          assert_equal(@table, read_table)
+        end
+      end
+
+      test("compression") do
+        output = Arrow::FileOutputStream.new(@tempfile.path, false)
+        properties = Arrow::FeatherWriteProperties.new
+        properties.compression = :zstd
+        @table.write_as_feather(output, properties)
+        output.close
+
+        read_feather do |read_table|
+          assert_equal(@table, read_table)
+        end
       end
     end
   end

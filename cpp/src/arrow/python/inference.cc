@@ -31,11 +31,11 @@
 #include "arrow/util/decimal.h"
 #include "arrow/util/logging.h"
 
+#include "arrow/python/datetime.h"
 #include "arrow/python/decimal.h"
 #include "arrow/python/helpers.h"
 #include "arrow/python/iterators.h"
 #include "arrow/python/numpy_convert.h"
-#include "arrow/python/util/datetime.h"
 
 namespace arrow {
 namespace py {
@@ -295,10 +295,8 @@ class TypeInferrer {
         int_count_(0),
         date_count_(0),
         time_count_(0),
-        timestamp_second_count_(0),
-        timestamp_milli_count_(0),
         timestamp_micro_count_(0),
-        timestamp_nano_count_(0),
+        duration_count_(0),
         float_count_(0),
         binary_count_(0),
         unicode_count_(0),
@@ -319,7 +317,7 @@ class TypeInferrer {
   Status Visit(PyObject* obj, bool* keep_going) {
     ++total_count_;
 
-    if (obj == Py_None || (pandas_null_sentinels_ && internal::PyFloat_IsNaN(obj))) {
+    if (obj == Py_None || (pandas_null_sentinels_ && internal::PandasObjectIsNull(obj))) {
       ++none_count_;
     } else if (PyBool_Check(obj)) {
       ++bool_count_;
@@ -330,7 +328,17 @@ class TypeInferrer {
     } else if (internal::IsPyInteger(obj)) {
       ++int_count_;
     } else if (PyDateTime_Check(obj)) {
+      // infer timezone from the first encountered datetime object
+      if (!timestamp_micro_count_) {
+        OwnedRef tzinfo(PyObject_GetAttrString(obj, "tzinfo"));
+        if (tzinfo.obj() != nullptr && tzinfo.obj() != Py_None) {
+          ARROW_ASSIGN_OR_RAISE(timezone_, internal::TzinfoToString(tzinfo.obj()));
+        }
+      }
       ++timestamp_micro_count_;
+      *keep_going = make_unions_;
+    } else if (PyDelta_Check(obj)) {
+      ++duration_count_;
       *keep_going = make_unions_;
     } else if (PyDate_Check(obj)) {
       ++date_count_;
@@ -442,7 +450,16 @@ class TypeInferrer {
     } else if (struct_count_) {
       RETURN_NOT_OK(GetStructType(out));
     } else if (decimal_count_) {
-      *out = decimal(max_decimal_metadata_.precision(), max_decimal_metadata_.scale());
+      if (max_decimal_metadata_.precision() > Decimal128Type::kMaxPrecision) {
+        // the default constructor does not validate the precision and scale
+        ARROW_ASSIGN_OR_RAISE(*out,
+                              Decimal256Type::Make(max_decimal_metadata_.precision(),
+                                                   max_decimal_metadata_.scale()));
+      } else {
+        ARROW_ASSIGN_OR_RAISE(*out,
+                              Decimal128Type::Make(max_decimal_metadata_.precision(),
+                                                   max_decimal_metadata_.scale()));
+      }
     } else if (float_count_) {
       // Prioritize floats before integers
       *out = float64();
@@ -452,14 +469,10 @@ class TypeInferrer {
       *out = date32();
     } else if (time_count_) {
       *out = time64(TimeUnit::MICRO);
-    } else if (timestamp_nano_count_) {
-      *out = timestamp(TimeUnit::NANO);
     } else if (timestamp_micro_count_) {
-      *out = timestamp(TimeUnit::MICRO);
-    } else if (timestamp_milli_count_) {
-      *out = timestamp(TimeUnit::MILLI);
-    } else if (timestamp_second_count_) {
-      *out = timestamp(TimeUnit::SECOND);
+      *out = timestamp(TimeUnit::MICRO, timezone_);
+    } else if (duration_count_) {
+      *out = duration(TimeUnit::MICRO);
     } else if (bool_count_) {
       *out = boolean();
     } else if (binary_count_) {
@@ -589,10 +602,9 @@ class TypeInferrer {
   int64_t int_count_;
   int64_t date_count_;
   int64_t time_count_;
-  int64_t timestamp_second_count_;
-  int64_t timestamp_milli_count_;
   int64_t timestamp_micro_count_;
-  int64_t timestamp_nano_count_;
+  std::string timezone_;
+  int64_t duration_count_;
   int64_t float_count_;
   int64_t binary_count_;
   int64_t unicode_count_;
@@ -615,34 +627,23 @@ class TypeInferrer {
 };
 
 // Non-exhaustive type inference
-Status InferArrowType(PyObject* obj, PyObject* mask, bool pandas_null_sentinels,
-                      std::shared_ptr<DataType>* out_type) {
-  PyDateTime_IMPORT;
+Result<std::shared_ptr<DataType>> InferArrowType(PyObject* obj, PyObject* mask,
+                                                 bool pandas_null_sentinels) {
+  if (pandas_null_sentinels) {
+    // ARROW-842: If pandas is not installed then null checks will be less
+    // comprehensive, but that is okay.
+    internal::InitPandasStaticData();
+  }
+
+  std::shared_ptr<DataType> out_type;
   TypeInferrer inferrer(pandas_null_sentinels);
   RETURN_NOT_OK(inferrer.VisitSequence(obj, mask));
-  RETURN_NOT_OK(inferrer.GetType(out_type));
-  if (*out_type == nullptr) {
+  RETURN_NOT_OK(inferrer.GetType(&out_type));
+  if (out_type == nullptr) {
     return Status::TypeError("Unable to determine data type");
+  } else {
+    return std::move(out_type);
   }
-
-  return Status::OK();
-}
-
-Status InferArrowTypeAndSize(PyObject* obj, PyObject* mask, bool pandas_null_sentinels,
-                             int64_t* size, std::shared_ptr<DataType>* out_type) {
-  if (!PySequence_Check(obj)) {
-    return Status::TypeError("Object is not a sequence");
-  }
-  *size = static_cast<int64_t>(PySequence_Size(obj));
-
-  // For 0-length sequences, refuse to guess
-  if (*size == 0) {
-    *out_type = null();
-    return Status::OK();
-  }
-  RETURN_NOT_OK(InferArrowType(obj, mask, pandas_null_sentinels, out_type));
-
-  return Status::OK();
 }
 
 ARROW_PYTHON_EXPORT

@@ -21,49 +21,65 @@
 #include <string>
 
 #include "arrow/csv/options.h"
+#include "arrow/dataset/dataset.h"
 #include "arrow/dataset/file_base.h"
 #include "arrow/dataset/type_fwd.h"
 #include "arrow/dataset/visibility.h"
-#include "arrow/util/iterator.h"
+#include "arrow/status.h"
+#include "arrow/util/compression.h"
 
 namespace arrow {
-
-namespace fs {
-
-class FileSystem;
-
-}  // namespace fs
-
 namespace dataset {
 
-class ARROW_DS_EXPORT CsvScanOptions : public FileScanOptions {
- public:
-  std::string file_type() const override;
+constexpr char kCsvTypeName[] = "csv";
 
- private:
-  csv::ParseOptions parse_options_;
-  csv::ConvertOptions convert_options_;
-  csv::ReadOptions read_options_;
-};
+/// \addtogroup dataset-file-formats
+///
+/// @{
 
-class ARROW_DS_EXPORT CsvWriteOptions : public FileWriteOptions {
- public:
-  std::string file_type() const override;
-};
-
-/// \brief A FileFormat implementation that reads from CSV files
+/// \brief A FileFormat implementation that reads from and writes to Csv files
 class ARROW_DS_EXPORT CsvFileFormat : public FileFormat {
  public:
-  std::string name() const override;
+  /// Options affecting the parsing of CSV files
+  csv::ParseOptions parse_options = csv::ParseOptions::Defaults();
 
-  /// \brief Return true if the given file extension
-  bool IsKnownExtension(const std::string& ext) const override;
+  std::string type_name() const override { return kCsvTypeName; }
+
+  bool Equals(const FileFormat& other) const override;
+
+  Result<bool> IsSupported(const FileSource& source) const override;
+
+  /// \brief Return the schema of the file if possible.
+  Result<std::shared_ptr<Schema>> Inspect(const FileSource& source) const override;
 
   /// \brief Open a file for scanning
-  Status ScanFile(const FileSource& location, std::shared_ptr<ScanOptions> scan_options,
-                  std::shared_ptr<ScanContext> scan_context,
-                  std::unique_ptr<ScanTaskIterator>* out) const override;
+  Result<ScanTaskIterator> ScanFile(
+      const std::shared_ptr<ScanOptions>& options,
+      const std::shared_ptr<FileFragment>& fragment) const override;
+
+  Result<std::shared_ptr<FileWriter>> MakeWriter(
+      std::shared_ptr<io::OutputStream> destination, std::shared_ptr<Schema> schema,
+      std::shared_ptr<FileWriteOptions> options) const override {
+    return Status::NotImplemented("writing fragment of CsvFileFormat");
+  }
+
+  std::shared_ptr<FileWriteOptions> DefaultWriteOptions() override { return NULLPTR; }
 };
+
+/// \brief Per-scan options for CSV fragments
+struct ARROW_DS_EXPORT CsvFragmentScanOptions : public FragmentScanOptions {
+  std::string type_name() const override { return kCsvTypeName; }
+
+  /// CSV conversion options
+  csv::ConvertOptions convert_options = csv::ConvertOptions::Defaults();
+
+  /// CSV reading options
+  ///
+  /// Note that use_threads is always ignored.
+  csv::ReadOptions read_options = csv::ReadOptions::Defaults();
+};
+
+/// @}
 
 }  // namespace dataset
 }  // namespace arrow

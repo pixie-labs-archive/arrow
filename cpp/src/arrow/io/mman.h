@@ -5,8 +5,7 @@
 //
 // https://opensource.org/licenses/MIT
 
-#ifndef _MMAN_WIN32_H
-#define _MMAN_WIN32_H
+#pragma once
 
 #include "arrow/util/windows_compatibility.h"
 
@@ -93,7 +92,7 @@ static inline void* mmap(void* addr, size_t len, int prot, int flags, int fildes
   if (len == 0
       /* Unsupported flag combinations */
       || (flags & MAP_FIXED) != 0
-      /* Usupported protection combinations */
+      /* Unsupported protection combinations */
       || prot == PROT_EXEC) {
     errno = EINVAL;
     return MAP_FAILED;
@@ -168,5 +167,3 @@ static inline int munlock(const void* addr, size_t len) {
 
   return -1;
 }
-
-#endif

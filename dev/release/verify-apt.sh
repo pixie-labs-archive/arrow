@@ -16,122 +16,150 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-#
 
 set -exu
 
 if [ $# -lt 2 ]; then
-  echo "Usage: $0 X.Y.Z IS_RC"
-  echo "       $0 X.Y.Z IS_RC BINTRAY_REPOSITORY"
-  echo " e.g.: $0 0.13.0 yes           # Verify 0.13.0 RC"
-  echo " e.g.: $0 0.13.0 no            # Verify 0.13.0"
-  echo " e.g.: $0 0.13.0 yes kou/arrow # Verify 0.13.0 RC at https://bintray.com/kou/arrow"
+  echo "Usage: $0 VERSION rc"
+  echo "       $0 VERSION rc BINTRAY_REPOSITORY"
+  echo "       $0 VERSION release"
+  echo "       $0 VERSION local"
+  echo " e.g.: $0 0.13.0 rc           # Verify 0.13.0 RC"
+  echo " e.g.: $0 0.13.0 release      # Verify 0.13.0"
+  echo " e.g.: $0 0.13.0 rc kszucs/arrow # Verify 0.13.0 RC at https://bintray.com/kszucs/arrow"
+  echo " e.g.: $0 0.13.0-dev20210203 local # Verify 0.13.0-dev20210203 on local"
   exit 1
 fi
 
 VERSION="$1"
-IS_RC="$2"
-BINTRAY_REPOSITORY="${3:-apache/arrow}"
+TYPE="$2"
 
-deb_version="${VERSION}-1"
+local_prefix="/arrow/dev/tasks/linux-packages"
 
 export DEBIAN_FRONTEND=noninteractive
 
 apt update
 apt install -y -V \
-  apt-transport-https \
   curl \
-  gnupg \
   lsb-release
 
 code_name="$(lsb_release --codename --short)"
 distribution="$(lsb_release --id --short | tr 'A-Z' 'a-z')"
-bintray_base_url="https://dl.bintray.com/${BINTRAY_REPOSITORY}/${distribution}"
-if [ "${IS_RC}" = "yes" ]; then
-  bintray_base_url="${bintray_base_url}-rc"
+artifactory_base_url="https://apache.jfrog.io/artifactory/arrow/${distribution}"
+if [ "${TYPE}" = "rc" ]; then
+  artifactory_base_url+="-rc"
 fi
 
-have_signed_by=yes
 have_flight=yes
-have_python=yes
-have_gandiva=yes
-need_llvm_apt=no
+have_plasma=yes
+workaround_missing_packages=()
 case "${distribution}-${code_name}" in
-  debian-stretch)
+  debian-*)
     sed \
       -i"" \
       -e "s/ main$/ main contrib non-free/g" \
       /etc/apt/sources.list
-    cat <<APT_LINE > /etc/apt/sources.list.d/backports.list
-deb http://deb.debian.org/debian ${code_name}-backports main
-APT_LINE
-    need_llvm_apt=yes
-    ;;
-  debian-buster)
-    sed \
-      -i"" \
-      -e "s/ main$/ main contrib non-free/g" \
-      /etc/apt/sources.list
-    ;;
-  ubuntu-xenial)
-    have_signed_by=no
-    need_llvm_apt=yes
-    have_flight=no
-    ;;
-  ubuntu-trusty)
-    have_signed_by=no
-    have_flight=no
-    have_python=no
-    have_gandiva=no
     ;;
 esac
-
-if [ "${have_signed_by}" = "yes" ]; then
-  keyring_path="/usr/share/keyrings/apache-arrow-keyring.gpg"
-  curl \
-    --output "${keyring_path}" \
-    "${bintray_base_url}/apache-arrow-keyring.gpg"
-  cat <<APT_LINE > /etc/apt/sources.list.d/apache-arrow.list
-deb [arch=amd64 signed-by=${keyring_path}] ${bintray_base_url}/ ${code_name} main
-deb-src [signed-by=${keyring_path}] ${bintray_base_url}/ ${code_name} main
-APT_LINE
-else
-  curl https://dist.apache.org/repos/dist/dev/arrow/KEYS | apt-key add -
-  cat <<APT_LINE > /etc/apt/sources.list.d/apache-arrow.list
-deb [arch=amd64] ${bintray_base_url}/ ${code_name} main
-deb-src ${bintray_base_url}/ ${code_name} main
-APT_LINE
+if [ "$(arch)" = "aarch64" ]; then
+  have_plasma=no
 fi
 
-if [ "${need_llvm_apt}" = "yes" ]; then
-  curl https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add -
-  cat <<APT_LINE > /etc/apt/sources.list.d/llvm.list
-deb http://apt.llvm.org/${code_name}/ llvm-toolchain-${code_name}-7 main
-deb-src http://apt.llvm.org/${code_name}/ llvm-toolchain-${code_name}-7 main
-APT_LINE
+if [ "${TYPE}" = "local" ]; then
+  case "${VERSION}" in
+    *-dev*)
+      package_version="$(echo "${VERSION}" | sed -e 's/-dev\(.*\)$/~dev\1/g')"
+      ;;
+    *-rc*)
+      package_version="$(echo "${VERSION}" | sed -e 's/-rc.*$//g')"
+      ;;
+    *)
+      package_version="${VERSION}"
+      ;;
+  esac
+  package_version+="-1"
+  apt_source_path="${local_prefix}/apt/repositories"
+  apt_source_path+="/${distribution}/pool/${code_name}/main"
+  apt_source_path+="/a/apache-arrow-apt-source"
+  apt_source_path+="/apache-arrow-apt-source_${package_version}_all.deb"
+  apt install -y -V "${apt_source_path}"
+else
+  package_version="${VERSION}-1"
+  apt_source_base_name="apache-arrow-apt-source-latest-${code_name}.deb"
+  if [ $# -eq 3 ]; then
+    curl \
+      --output "${apt_source_base_name}" \
+      "https://dl.bintray.com/$3/${distribution}-rc/${apt_source_base_name}"
+  else
+    curl \
+      --output "${apt_source_base_name}" \
+      "${artifactory_base_url}/${apt_source_base_name}"
+  fi
+  apt install -y -V "./${apt_source_base_name}"
+fi
+
+if [ "${TYPE}" = "local" ]; then
+  sed \
+    -i"" \
+    -e "s,^URIs: .*$,URIs: file://${local_prefix}/apt/repositories/${distribution},g" \
+    /etc/apt/sources.list.d/apache-arrow.sources
+  keys="${local_prefix}/KEYS"
+  if [ -f "${keys}" ]; then
+    gpg \
+      --no-default-keyring \
+      --keyring /usr/share/keyrings/apache-arrow-apt-source.gpg \
+      --import "${keys}"
+  fi
+else
+  if [ "${TYPE}" = "rc" ]; then
+    if [ $# -eq 3 ]; then
+      sed \
+        -i"" \
+        -e "s,^URIs: .*/,URIs: https://dl.bintray.com/$3/${distribution}-rc/,g" \
+        /etc/apt/sources.list.d/apache-arrow.sources
+    else
+      sed \
+        -i"" \
+        -e "s,^URIs: \\(.*\\)/,URIs: \\1-rc/,g" \
+        /etc/apt/sources.list.d/apache-arrow.sources
+    fi
+  fi
 fi
 
 apt update
 
-apt install -y -V libarrow-glib-dev=${deb_version}
-apt install -y -V libarrow-glib-doc=${deb_version}
+apt install -y -V libarrow-glib-dev=${package_version}
+required_packages=()
+required_packages+=(cmake)
+required_packages+=(g++)
+required_packages+=(git)
+required_packages+=(${workaround_missing_packages[@]})
+apt install -y -V ${required_packages[@]}
+mkdir -p build
+cp -a /arrow/cpp/examples/minimal_build build
+pushd build/minimal_build
+cmake .
+make -j$(nproc)
+./arrow_example
+popd
+
+apt install -y -V libarrow-glib-dev=${package_version}
+apt install -y -V libarrow-glib-doc=${package_version}
 
 if [ "${have_flight}" = "yes" ]; then
-  apt install -y -V libarrow-flight-dev=${deb_version}
+  apt install -y -V libarrow-flight-dev=${package_version}
 fi
 
-if [ "${have_python}" = "yes" ]; then
-  apt install -y -V libarrow-python-dev=${deb_version}
+apt install -y -V libarrow-python-dev=${package_version}
+
+if [ "${have_plasma}" = "yes" ]; then
+  apt install -y -V libplasma-glib-dev=${package_version}
+  apt install -y -V libplasma-glib-doc=${package_version}
+  apt install -y -V plasma-store-server=${package_version}
 fi
 
-apt install -y -V libplasma-glib-dev=${deb_version}
-apt install -y -V libplasma-glib-doc=${deb_version}
-apt install -y -V plasma-store-server=${deb_version}
+apt install -y -V libgandiva-glib-dev=${package_version}
+apt install -y -V libgandiva-glib-doc=${package_version}
 
-if [ "${have_gandiva}" = "yes" ]; then
-  apt install -y -V libgandiva-glib-dev=${deb_version}
-  apt install -y -V libgandiva-glib-doc=${deb_version}
-fi
-
-apt install -y -V libparquet-glib-dev=${deb_version}
-apt install -y -V libparquet-glib-doc=${deb_version}
+apt install -y -V libparquet-glib-dev=${package_version}
+apt install -y -V libparquet-glib-doc=${package_version}

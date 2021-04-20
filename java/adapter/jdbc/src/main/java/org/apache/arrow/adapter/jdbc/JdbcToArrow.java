@@ -24,11 +24,11 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Calendar;
 
-import org.apache.arrow.memory.BaseAllocator;
+import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
+import org.apache.arrow.util.Preconditions;
 import org.apache.arrow.vector.VectorSchemaRoot;
-
-import com.google.common.base.Preconditions;
+import org.apache.arrow.vector.util.ValueVectorUtility;
 
 /**
  * Utility class to convert JDBC objects to columnar Arrow format objects.
@@ -79,12 +79,13 @@ public class JdbcToArrow {
    * @throws SQLException Propagate any SQL Exceptions to the caller after closing any resources opened such as
    *                      ResultSet and Statement objects.
    */
-  public static VectorSchemaRoot sqlToArrow(Connection connection, String query, BaseAllocator allocator)
+  @Deprecated
+  public static VectorSchemaRoot sqlToArrow(Connection connection, String query, BufferAllocator allocator)
       throws SQLException, IOException {
     Preconditions.checkNotNull(allocator, "Memory allocator object can not be null");
 
     JdbcToArrowConfig config =
-            new JdbcToArrowConfig(allocator, JdbcToArrowUtils.getUtcCalendar());
+        new JdbcToArrowConfig(allocator, JdbcToArrowUtils.getUtcCalendar());
     return sqlToArrow(connection, query, config);
   }
 
@@ -101,10 +102,11 @@ public class JdbcToArrow {
    * @throws SQLException Propagate any SQL Exceptions to the caller after closing any resources opened such as
    *                      ResultSet and Statement objects.
    */
+  @Deprecated
   public static VectorSchemaRoot sqlToArrow(
       Connection connection,
       String query,
-      BaseAllocator allocator,
+      BufferAllocator allocator,
       Calendar calendar) throws SQLException, IOException {
 
     Preconditions.checkNotNull(allocator, "Memory allocator object can not be null");
@@ -125,6 +127,7 @@ public class JdbcToArrow {
    * @throws SQLException Propagate any SQL Exceptions to the caller after closing any resources opened such as
    *                      ResultSet and Statement objects.
    */
+  @Deprecated
   public static VectorSchemaRoot sqlToArrow(Connection connection, String query, JdbcToArrowConfig config)
       throws SQLException, IOException {
     Preconditions.checkNotNull(connection, "JDBC connection object can not be null");
@@ -143,6 +146,7 @@ public class JdbcToArrow {
    * @return Arrow Data Objects {@link VectorSchemaRoot}
    * @throws SQLException on error
    */
+  @Deprecated
   public static VectorSchemaRoot sqlToArrow(ResultSet resultSet) throws SQLException, IOException {
     Preconditions.checkNotNull(resultSet, "JDBC ResultSet object can not be null");
 
@@ -157,12 +161,13 @@ public class JdbcToArrow {
    * @return Arrow Data Objects {@link VectorSchemaRoot}
    * @throws SQLException on error
    */
-  public static VectorSchemaRoot sqlToArrow(ResultSet resultSet, BaseAllocator allocator)
+  @Deprecated
+  public static VectorSchemaRoot sqlToArrow(ResultSet resultSet, BufferAllocator allocator)
       throws SQLException, IOException {
     Preconditions.checkNotNull(allocator, "Memory Allocator object can not be null");
 
-    JdbcToArrowConfig config = 
-            new JdbcToArrowConfig(allocator, JdbcToArrowUtils.getUtcCalendar());
+    JdbcToArrowConfig config =
+        new JdbcToArrowConfig(allocator, JdbcToArrowUtils.getUtcCalendar());
     return sqlToArrow(resultSet, config);
   }
 
@@ -174,6 +179,7 @@ public class JdbcToArrow {
    * @return Arrow Data Objects {@link VectorSchemaRoot}
    * @throws SQLException on error
    */
+  @Deprecated
   public static VectorSchemaRoot sqlToArrow(ResultSet resultSet, Calendar calendar) throws SQLException, IOException {
     Preconditions.checkNotNull(resultSet, "JDBC ResultSet object can not be null");
     return sqlToArrow(resultSet, new JdbcToArrowConfig(new RootAllocator(Integer.MAX_VALUE), calendar));
@@ -188,10 +194,11 @@ public class JdbcToArrow {
    * @return Arrow Data Objects {@link VectorSchemaRoot}
    * @throws SQLException on error
    */
+  @Deprecated
   public static VectorSchemaRoot sqlToArrow(
-          ResultSet resultSet,
-          BaseAllocator allocator,
-          Calendar calendar)
+      ResultSet resultSet,
+      BufferAllocator allocator,
+      Calendar calendar)
       throws SQLException, IOException {
     Preconditions.checkNotNull(allocator, "Memory Allocator object can not be null");
 
@@ -206,14 +213,61 @@ public class JdbcToArrow {
    * @return Arrow Data Objects {@link VectorSchemaRoot}
    * @throws SQLException on error
    */
+  @Deprecated
   public static VectorSchemaRoot sqlToArrow(ResultSet resultSet, JdbcToArrowConfig config)
       throws SQLException, IOException {
     Preconditions.checkNotNull(resultSet, "JDBC ResultSet object can not be null");
     Preconditions.checkNotNull(config, "The configuration cannot be null");
 
     VectorSchemaRoot root = VectorSchemaRoot.create(
-            JdbcToArrowUtils.jdbcToArrowSchema(resultSet.getMetaData(), config), config.getAllocator());
+        JdbcToArrowUtils.jdbcToArrowSchema(resultSet.getMetaData(), config), config.getAllocator());
+    if (config.getTargetBatchSize() != JdbcToArrowConfig.NO_LIMIT_BATCH_SIZE) {
+      ValueVectorUtility.preAllocate(root, config.getTargetBatchSize());
+    }
     JdbcToArrowUtils.jdbcToArrowVectors(resultSet, root, config);
     return root;
+  }
+
+  /*----------------------------------------------------------------*
+   |                                                                |
+   |          Partial Convert API                        |
+   |                                                                |
+   *----------------------------------------------------------------*/
+
+  /**
+   * For the given JDBC {@link ResultSet}, fetch the data from Relational DB and convert it to Arrow objects.
+   * Note here uses the default targetBatchSize = 1024.
+   *
+   * @param resultSet ResultSet to use to fetch the data from underlying database
+   * @param allocator Memory allocator
+   * @return Arrow Data Objects {@link ArrowVectorIterator}
+   * @throws SQLException on error
+   */
+  public static ArrowVectorIterator sqlToArrowVectorIterator(
+      ResultSet resultSet,
+      BufferAllocator allocator)
+      throws SQLException, IOException {
+    Preconditions.checkNotNull(allocator, "Memory Allocator object can not be null");
+
+    JdbcToArrowConfig config =
+        new JdbcToArrowConfig(allocator, JdbcToArrowUtils.getUtcCalendar());
+    return sqlToArrowVectorIterator(resultSet, config);
+  }
+
+  /**
+   * For the given JDBC {@link ResultSet}, fetch the data from Relational DB and convert it to Arrow objects.
+   * Note if not specify {@link JdbcToArrowConfig#targetBatchSize}, will use default value 1024.
+   * @param resultSet ResultSet to use to fetch the data from underlying database
+   * @param config    Configuration of the conversion from JDBC to Arrow.
+   * @return Arrow Data Objects {@link ArrowVectorIterator}
+   * @throws SQLException on error
+   */
+  public static ArrowVectorIterator sqlToArrowVectorIterator(
+      ResultSet resultSet,
+      JdbcToArrowConfig config)
+      throws SQLException, IOException {
+    Preconditions.checkNotNull(resultSet, "JDBC ResultSet object can not be null");
+    Preconditions.checkNotNull(config, "The configuration cannot be null");
+    return ArrowVectorIterator.create(resultSet, config);
   }
 }

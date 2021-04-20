@@ -28,6 +28,8 @@ import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.VectorLoader;
 import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.arrow.vector.compression.CompressionCodec;
+import org.apache.arrow.vector.compression.NoCompressionCodec;
 import org.apache.arrow.vector.dictionary.Dictionary;
 import org.apache.arrow.vector.dictionary.DictionaryProvider;
 import org.apache.arrow.vector.ipc.message.ArrowDictionaryBatch;
@@ -35,6 +37,7 @@ import org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.apache.arrow.vector.util.DictionaryUtility;
+import org.apache.arrow.vector.util.VectorBatchAppender;
 
 /**
  * Abstract class to read Schema and ArrowRecordBatches.
@@ -45,11 +48,18 @@ public abstract class ArrowReader implements DictionaryProvider, AutoCloseable {
   protected final BufferAllocator allocator;
   private VectorLoader loader;
   private VectorSchemaRoot root;
-  private Map<Long, Dictionary> dictionaries;
+  protected Map<Long, Dictionary> dictionaries;
   private boolean initialized = false;
 
+  private final CompressionCodec.Factory compressionFactory;
+
   protected ArrowReader(BufferAllocator allocator) {
+    this(allocator, NoCompressionCodec.Factory.INSTANCE);
+  }
+
+  protected ArrowReader(BufferAllocator allocator, CompressionCodec.Factory compressionFactory) {
     this.allocator = allocator;
+    this.compressionFactory = compressionFactory;
   }
 
   /**
@@ -151,15 +161,6 @@ public abstract class ArrowReader implements DictionaryProvider, AutoCloseable {
   protected abstract Schema readSchema() throws IOException;
 
   /**
-   * Read a dictionary batch from the source, will be invoked after the schema has been read and
-   * called N times, where N is the number of dictionaries indicated by the schema Fields.
-   *
-   * @return the read ArrowDictionaryBatch
-   * @throws IOException on error
-   */
-  protected abstract ArrowDictionaryBatch readDictionary() throws IOException;
-
-  /**
    * Initialize if not done previously.
    *
    * @throws IOException on error
@@ -174,10 +175,10 @@ public abstract class ArrowReader implements DictionaryProvider, AutoCloseable {
   /**
    * Reads the schema and initializes the vectors.
    */
-  private void initialize() throws IOException {
+  protected void initialize() throws IOException {
     Schema originalSchema = readSchema();
-    List<Field> fields = new ArrayList<>();
-    List<FieldVector> vectors = new ArrayList<>();
+    List<Field> fields = new ArrayList<>(originalSchema.getFields().size());
+    List<FieldVector> vectors = new ArrayList<>(originalSchema.getFields().size());
     Map<Long, Dictionary> dictionaries = new HashMap<>();
 
     // Convert fields with dictionaries to have the index type
@@ -189,14 +190,8 @@ public abstract class ArrowReader implements DictionaryProvider, AutoCloseable {
     Schema schema = new Schema(fields, originalSchema.getCustomMetadata());
 
     this.root = new VectorSchemaRoot(schema, vectors, 0);
-    this.loader = new VectorLoader(root);
+    this.loader = new VectorLoader(root, compressionFactory);
     this.dictionaries = Collections.unmodifiableMap(dictionaries);
-
-    // Read and load all dictionaries from schema
-    for (int i = 0; i < dictionaries.size(); i++) {
-      ArrowDictionaryBatch dictionaryBatch = readDictionary();
-      loadDictionary(dictionaryBatch);
-    }
   }
 
   /**
@@ -234,6 +229,19 @@ public abstract class ArrowReader implements DictionaryProvider, AutoCloseable {
       throw new IllegalArgumentException("Dictionary ID " + id + " not defined in schema");
     }
     FieldVector vector = dictionary.getVector();
+    // if is deltaVector, concat it with non-delta vector with the same ID.
+    if (dictionaryBatch.isDelta()) {
+      try (FieldVector deltaVector = vector.getField().createVector(allocator)) {
+        load(dictionaryBatch, deltaVector);
+        VectorBatchAppender.batchAppend(vector, deltaVector);
+      }
+      return;
+    }
+
+    load(dictionaryBatch, vector);
+  }
+
+  private void load(ArrowDictionaryBatch dictionaryBatch, FieldVector vector) {
     VectorSchemaRoot root = new VectorSchemaRoot(
         Collections.singletonList(vector.getField()),
         Collections.singletonList(vector), 0);

@@ -20,9 +20,8 @@
 # Conda Forge recipes
 
 This directory must be migrated periodically with the upstrem updates of
-[arrow-cpp-feedstock][arrow-cpp-feedsotkc],
-[parquet-cpp-feedstock][parquet-cpp-feedstock] and
-[pyarrow-feedstock][pyarrow-feedstock]
+[arrow-cpp-feedstock][arrow-cpp-feedstock],
+[parquet-cpp-feedstock][parquet-cpp-feedstock].
 conda-forge repositories because of multiple vendored files.
 
 ## Keeping the recipes synchronized
@@ -34,17 +33,17 @@ latest releases.
 ### Backporting from the upstream feedstocks
 
 In most of the cases these recipes are more accurate, then the upstream
-feedstocks. Altough the upstream feedstocks regurarly receive automatic updates
+feedstocks. Although the upstream feedstocks regularly receive automatic updates
 by the conda-forge team so we need to backport those changes to the crossbow
 recipes. Most of these updates are touching the version pinning files
 (under `.ci_support`) and other CI related configuration files.
 
 Because all three recipes must be built in the same continuous integration
-job prefer porting from the [pyarrow feedstock][pyarrow-feedstock].
+job prefer porting from the [arrpw-cpp feedstock][arrow-cpp-feedstock].
 
 #### Updating the variants:
 
-Copy the configuration files from `pyarrow-feedstock/.ci_support` to the
+Copy the configuration files from `arrow-cpp-feedstock/.ci_support` to the
 `.ci_support` folder.
 
 #### Updating the CI configurations:
@@ -65,5 +64,4 @@ copied to the upstream feedstocks.
 
 [arrow-cpp-feedstock]: https://github.com/conda-forge/arrow-cpp-feedstock
 [parquet-cpp-feedstock]: https://github.com/conda-forge/parquet-cpp-feedstock
-[pyarrow-cpp-feedstock]: https://github.com/conda-forge/pyarrow-feedstock
-[matrix-definition]: https://github.com/conda-forge/pyarrow-feedstock/blob/master/.azure-pipelines/azure-pipelines-linux.yml#L12
+[matrix-definition]: https://github.com/conda-forge/arrow-cpp-feedstock/blob/master/.azure-pipelines/azure-pipelines-linux.yml#L12

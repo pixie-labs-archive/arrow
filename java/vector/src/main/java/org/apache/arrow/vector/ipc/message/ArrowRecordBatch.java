@@ -17,24 +17,24 @@
 
 package org.apache.arrow.vector.ipc.message;
 
-import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
 
 import org.apache.arrow.flatbuf.RecordBatch;
+import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.memory.BufferAllocator;
-import org.apache.arrow.util.DataSizeRoundingUtil;
+import org.apache.arrow.util.Preconditions;
+import org.apache.arrow.vector.compression.NoCompressionCodec;
+import org.apache.arrow.vector.util.DataSizeRoundingUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.google.flatbuffers.FlatBufferBuilder;
 
-import io.netty.buffer.ArrowBuf;
-
 /**
- * POJO representation of an RecordBatch IPC message (https://arrow.apache.org/docs/format/IPC.html).
+ * POJO representation of a RecordBatch IPC message (https://arrow.apache.org/docs/format/IPC.html).
  */
 public class ArrowRecordBatch implements ArrowMessage {
 
@@ -52,12 +52,21 @@ public class ArrowRecordBatch implements ArrowMessage {
 
   private final List<ArrowBuf> buffers;
 
+  private final ArrowBodyCompression bodyCompression;
+
   private final List<ArrowBuffer> buffersLayout;
 
   private boolean closed = false;
 
-  public ArrowRecordBatch(int length, List<ArrowFieldNode> nodes, List<ArrowBuf> buffers) {
-    this(length, nodes, buffers, true);
+  public ArrowRecordBatch(
+      int length, List<ArrowFieldNode> nodes, List<ArrowBuf> buffers) {
+    this(length, nodes, buffers, NoCompressionCodec.DEFAULT_BODY_COMPRESSION, true);
+  }
+
+  public ArrowRecordBatch(
+      int length, List<ArrowFieldNode> nodes, List<ArrowBuf> buffers,
+      ArrowBodyCompression bodyCompression) {
+    this(length, nodes, buffers, bodyCompression, true);
   }
 
   /**
@@ -66,19 +75,26 @@ public class ArrowRecordBatch implements ArrowMessage {
    * @param length  how many rows in this batch
    * @param nodes   field level info
    * @param buffers will be retained until this recordBatch is closed
+   * @param bodyCompression compression info.
    */
-  public ArrowRecordBatch(int length, List<ArrowFieldNode> nodes, List<ArrowBuf> buffers, boolean alignBuffers) {
+  public ArrowRecordBatch(
+      int length, List<ArrowFieldNode> nodes, List<ArrowBuf> buffers,
+      ArrowBodyCompression bodyCompression, boolean alignBuffers) {
     super();
     this.length = length;
     this.nodes = nodes;
     this.buffers = buffers;
+    Preconditions.checkArgument(bodyCompression != null, "body compression cannot be null");
+    this.bodyCompression = bodyCompression;
     List<ArrowBuffer> arrowBuffers = new ArrayList<>(buffers.size());
     long offset = 0;
     for (ArrowBuf arrowBuf : buffers) {
       arrowBuf.getReferenceManager().retain();
       long size = arrowBuf.readableBytes();
       arrowBuffers.add(new ArrowBuffer(offset, size));
-      LOGGER.debug("Buffer in RecordBatch at {}, length: {}", offset, size);
+      if (LOGGER.isDebugEnabled()) {
+        LOGGER.debug("Buffer in RecordBatch at {}, length: {}", offset, size);
+      }
       offset += size;
       if (alignBuffers) { // align on 8 byte boundaries
         offset = DataSizeRoundingUtil.roundUpTo8Multiple(offset);
@@ -91,10 +107,14 @@ public class ArrowRecordBatch implements ArrowMessage {
   // this constructor is different from the public ones in that the reference manager's
   // <code>retain</code> method is not called, so the first <code>dummy</code> parameter is used
   // to distinguish this from the public constructor.
-  private ArrowRecordBatch(boolean dummy, int length, List<ArrowFieldNode> nodes, List<ArrowBuf> buffers) {
+  private ArrowRecordBatch(
+      boolean dummy, int length, List<ArrowFieldNode> nodes,
+      List<ArrowBuf> buffers, ArrowBodyCompression bodyCompression) {
     this.length = length;
     this.nodes = nodes;
     this.buffers = buffers;
+    Preconditions.checkArgument(bodyCompression != null, "body compression cannot be null");
+    this.bodyCompression = bodyCompression;
     this.closed = false;
     List<ArrowBuffer> arrowBuffers = new ArrayList<>();
     long offset = 0;
@@ -106,8 +126,16 @@ public class ArrowRecordBatch implements ArrowMessage {
     this.buffersLayout = Collections.unmodifiableList(arrowBuffers);
   }
 
+  public byte getMessageType() {
+    return org.apache.arrow.flatbuf.MessageHeader.RecordBatch;
+  }
+
   public int getLength() {
     return length;
+  }
+
+  public ArrowBodyCompression getBodyCompression() {
+    return bodyCompression;
   }
 
   /**
@@ -147,7 +175,7 @@ public class ArrowRecordBatch implements ArrowMessage {
             .writerIndex(buf.writerIndex()))
         .collect(Collectors.toList());
     close();
-    return new ArrowRecordBatch(false, length, nodes, newBufs);
+    return new ArrowRecordBatch(false, length, nodes, newBufs, bodyCompression);
   }
 
   /**
@@ -165,10 +193,17 @@ public class ArrowRecordBatch implements ArrowMessage {
     int nodesOffset = FBSerializables.writeAllStructsToVector(builder, nodes);
     RecordBatch.startBuffersVector(builder, buffers.size());
     int buffersOffset = FBSerializables.writeAllStructsToVector(builder, buffersLayout);
+    int compressOffset = 0;
+    if (bodyCompression.getCodec() != NoCompressionCodec.COMPRESSION_TYPE) {
+      compressOffset = bodyCompression.writeTo(builder);
+    }
     RecordBatch.startRecordBatch(builder);
     RecordBatch.addLength(builder, length);
     RecordBatch.addNodes(builder, nodesOffset);
     RecordBatch.addBuffers(builder, buffersOffset);
+    if (bodyCompression.getCodec() != NoCompressionCodec.COMPRESSION_TYPE) {
+      RecordBatch.addCompression(builder, compressOffset);
+    }
     return RecordBatch.endRecordBatch(builder);
   }
 
@@ -200,8 +235,8 @@ public class ArrowRecordBatch implements ArrowMessage {
    * Computes the size of the serialized body for this recordBatch.
    */
   @Override
-  public int computeBodyLength() {
-    int size = 0;
+  public long computeBodyLength() {
+    long size = 0;
 
     List<ArrowBuf> buffers = getBuffers();
     List<ArrowBuffer> buffersLayout = getBuffersLayout();
@@ -213,10 +248,7 @@ public class ArrowRecordBatch implements ArrowMessage {
     for (int i = 0; i < buffers.size(); i++) {
       ArrowBuf buffer = buffers.get(i);
       ArrowBuffer layout = buffersLayout.get(i);
-      size += (layout.getOffset() - size);
-      ByteBuffer nioBuffer =
-          buffer.nioBuffer(buffer.readerIndex(), buffer.readableBytes());
-      size += nioBuffer.remaining();
+      size = layout.getOffset() + buffer.readableBytes();
 
       // round up size to the next multiple of 8
       size = DataSizeRoundingUtil.roundUpTo8Multiple(size);

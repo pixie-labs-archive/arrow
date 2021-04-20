@@ -18,8 +18,7 @@
 #include <cstdint>
 #include <cstring>
 
-#include "arrow/buffer.h"
-#include "arrow/memory_pool.h"
+#include "arrow/result.h"
 #include "arrow/util/logging.h"
 #include "parquet/bloom_filter.h"
 #include "parquet/exception.h"
@@ -40,7 +39,7 @@ void BlockSplitBloomFilter::Init(uint32_t num_bytes) {
 
   // Get next power of 2 if it is not power of 2.
   if ((num_bytes & (num_bytes - 1)) != 0) {
-    num_bytes = static_cast<uint32_t>(BitUtil::NextPower2(num_bytes));
+    num_bytes = static_cast<uint32_t>(::arrow::BitUtil::NextPower2(num_bytes));
   }
 
   if (num_bytes > kMaximumBloomFilterBytes) {
@@ -48,7 +47,7 @@ void BlockSplitBloomFilter::Init(uint32_t num_bytes) {
   }
 
   num_bytes_ = num_bytes;
-  PARQUET_THROW_NOT_OK(::arrow::AllocateBuffer(pool_, num_bytes_, &data_));
+  PARQUET_ASSIGN_OR_THROW(data_, ::arrow::AllocateBuffer(num_bytes_, pool_));
   memset(data_->mutable_data(), 0, num_bytes_);
 
   this->hasher_.reset(new MurmurHash3());
@@ -63,7 +62,7 @@ void BlockSplitBloomFilter::Init(const uint8_t* bitset, uint32_t num_bytes) {
   }
 
   num_bytes_ = num_bytes;
-  PARQUET_THROW_NOT_OK(::arrow::AllocateBuffer(pool_, num_bytes_, &data_));
+  PARQUET_ASSIGN_OR_THROW(data_, ::arrow::AllocateBuffer(num_bytes_, pool_));
   memcpy(data_->mutable_data(), bitset, num_bytes_);
 
   this->hasher_.reset(new MurmurHash3());
@@ -71,14 +70,14 @@ void BlockSplitBloomFilter::Init(const uint8_t* bitset, uint32_t num_bytes) {
 
 BlockSplitBloomFilter BlockSplitBloomFilter::Deserialize(ArrowInputStream* input) {
   uint32_t len, hash, algorithm;
-  int64_t bytes_available = -1;
+  int64_t bytes_available;
 
-  PARQUET_THROW_NOT_OK(input->Read(sizeof(uint32_t), &bytes_available, &len));
+  PARQUET_ASSIGN_OR_THROW(bytes_available, input->Read(sizeof(uint32_t), &len));
   if (static_cast<uint32_t>(bytes_available) != sizeof(uint32_t)) {
     throw ParquetException("Failed to deserialize from input stream");
   }
 
-  PARQUET_THROW_NOT_OK(input->Read(sizeof(uint32_t), &bytes_available, &hash));
+  PARQUET_ASSIGN_OR_THROW(bytes_available, input->Read(sizeof(uint32_t), &hash));
   if (static_cast<uint32_t>(bytes_available) != sizeof(uint32_t)) {
     throw ParquetException("Failed to deserialize from input stream");
   }
@@ -86,7 +85,7 @@ BlockSplitBloomFilter BlockSplitBloomFilter::Deserialize(ArrowInputStream* input
     throw ParquetException("Unsupported hash strategy");
   }
 
-  PARQUET_THROW_NOT_OK(input->Read(sizeof(uint32_t), &bytes_available, &algorithm));
+  PARQUET_ASSIGN_OR_THROW(bytes_available, input->Read(sizeof(uint32_t), &algorithm));
   if (static_cast<uint32_t>(bytes_available) != sizeof(uint32_t)) {
     throw ParquetException("Failed to deserialize from input stream");
   }
@@ -96,8 +95,7 @@ BlockSplitBloomFilter BlockSplitBloomFilter::Deserialize(ArrowInputStream* input
 
   BlockSplitBloomFilter bloom_filter;
 
-  std::shared_ptr<Buffer> buffer;
-  PARQUET_THROW_NOT_OK(input->Read(len, &buffer));
+  PARQUET_ASSIGN_OR_THROW(auto buffer, input->Read(len));
   bloom_filter.Init(buffer->data(), len);
   return bloom_filter;
 }

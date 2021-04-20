@@ -12,4 +12,9 @@ inst/doc
 src/Makevars
 src/Makevars.win
 windows/
+libarrow/
+revdep/
+vignettes/nyc-taxi/
 arrow_*.tar.gz
+arrow_*.tgz
+extra-tests/files

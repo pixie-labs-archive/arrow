@@ -25,6 +25,7 @@ import { Message } from './metadata/message';
 import * as metadata from './metadata/message';
 import { FileBlock, Footer } from './metadata/file';
 import { MessageHeader, MetadataVersion } from '../enum';
+import { compareSchemas } from '../visitor/typecomparator';
 import { WritableSink, AsyncByteQueue } from '../io/stream';
 import { VectorAssembler } from '../visitor/vectorassembler';
 import { JSONTypeAssembler } from '../visitor/jsontypeassembler';
@@ -32,7 +33,21 @@ import { JSONVectorAssembler } from '../visitor/jsonvectorassembler';
 import { ArrayBufferViewInput, toUint8Array } from '../util/buffer';
 import { RecordBatch, _InternalEmptyPlaceholderRecordBatch } from '../recordbatch';
 import { Writable, ReadableInterop, ReadableDOMStreamOptions } from '../io/interfaces';
-import { isPromise, isAsyncIterable, isWritableDOMStream, isWritableNodeStream, isIterable } from '../util/compat';
+import { isPromise, isAsyncIterable, isWritableDOMStream, isWritableNodeStream, isIterable, isObject } from '../util/compat';
+
+export interface RecordBatchStreamWriterOptions {
+    /**
+     *
+     */
+    autoDestroy?: boolean;
+    /**
+     * A flag indicating whether the RecordBatchWriter should construct pre-0.15.0
+     * encapsulated IPC Messages, which reserves  4 bytes for the Message metadata
+     * length instead of 8.
+     * @see https://issues.apache.org/jira/browse/ARROW-6313
+     */
+    writeLegacyIpcFormat?: boolean;
+}
 
 export class RecordBatchWriter<T extends { [key: string]: DataType } = any> extends ReadableInterop<Uint8Array> implements Writable<RecordBatch<T>> {
 
@@ -46,19 +61,22 @@ export class RecordBatchWriter<T extends { [key: string]: DataType } = any> exte
         // @ts-ignore
         writableStrategy?: QueuingStrategy<RecordBatch<T>> & { autoDestroy: boolean },
         // @ts-ignore
-        readableStrategy?: { highWaterMark?: number, size?: any }
-    ): { writable: WritableStream<Table<T> | RecordBatch<T>>, readable: ReadableStream<Uint8Array> } {
+        readableStrategy?: { highWaterMark?: number; size?: any }
+    ): { writable: WritableStream<Table<T> | RecordBatch<T>>; readable: ReadableStream<Uint8Array> } {
         throw new Error(`"throughDOM" not available in this environment`);
     }
 
-    constructor(options?: { autoDestroy: boolean }) {
+    constructor(options?: RecordBatchStreamWriterOptions) {
         super();
-        this._autoDestroy = options && (typeof options.autoDestroy === 'boolean') ? options.autoDestroy : true;
+        isObject(options) || (options = { autoDestroy: true, writeLegacyIpcFormat: false });
+        this._autoDestroy = (typeof options.autoDestroy === 'boolean') ? options.autoDestroy : true;
+        this._writeLegacyIpcFormat = (typeof options.writeLegacyIpcFormat === 'boolean') ? options.writeLegacyIpcFormat : false;
     }
 
     protected _position = 0;
     protected _started = false;
     protected _autoDestroy: boolean;
+    protected _writeLegacyIpcFormat: boolean;
     // @ts-ignore
     protected _sink = new AsyncByteQueue();
     protected _schema: Schema | null = null;
@@ -106,7 +124,6 @@ export class RecordBatchWriter<T extends { [key: string]: DataType } = any> exte
         return this;
     }
     public reset(sink: WritableSink<ArrayBufferViewInput> = this._sink, schema: Schema<T> | null = null) {
-
         if ((sink === this._sink) || (sink instanceof AsyncByteQueue)) {
             this._sink = sink as AsyncByteQueue;
         } else {
@@ -127,7 +144,7 @@ export class RecordBatchWriter<T extends { [key: string]: DataType } = any> exte
         this._recordBatchBlocks = [];
         this._dictionaryDeltaOffsets = new Map();
 
-        if (!schema || !(schema.compareTo(this._schema))) {
+        if (!schema || !(compareSchemas(schema, this._schema))) {
             if (schema === null) {
                 this._position = 0;
                 this._schema = null;
@@ -142,7 +159,6 @@ export class RecordBatchWriter<T extends { [key: string]: DataType } = any> exte
     }
 
     public write(payload?: Table<T> | RecordBatch<T> | Iterable<RecordBatch<T>> | null) {
-
         let schema: Schema<T> | null = null;
 
         if (!this._sink) {
@@ -155,7 +171,7 @@ export class RecordBatchWriter<T extends { [key: string]: DataType } = any> exte
             return this.finish() && undefined;
         }
 
-        if (schema && !schema.compareTo(this._schema)) {
+        if (schema && !compareSchemas(schema, this._schema)) {
             if (this._started && this._autoDestroy) {
                 return this.close();
             }
@@ -174,12 +190,12 @@ export class RecordBatchWriter<T extends { [key: string]: DataType } = any> exte
     }
 
     protected _writeMessage<T extends MessageHeader>(message: Message<T>, alignment = 8) {
-
         const a = alignment - 1;
         const buffer = Message.encode(message);
         const flatbufferSize = buffer.byteLength;
-        const alignedSize = (flatbufferSize + 4 + a) & ~a;
-        const nPaddingBytes = alignedSize - flatbufferSize - 4;
+        const prefixSize = !this._writeLegacyIpcFormat ? 8 : 4;
+        const alignedSize = (flatbufferSize + prefixSize + a) & ~a;
+        const nPaddingBytes = alignedSize - flatbufferSize - prefixSize;
 
         if (message.headerType === MessageHeader.RecordBatch) {
             this._recordBatchBlocks.push(new FileBlock(alignedSize, message.bodyLength, this._position));
@@ -187,8 +203,12 @@ export class RecordBatchWriter<T extends { [key: string]: DataType } = any> exte
             this._dictionaryBlocks.push(new FileBlock(alignedSize, message.bodyLength, this._position));
         }
 
+        // If not in legacy pre-0.15.0 mode, write the stream continuation indicator
+        if (!this._writeLegacyIpcFormat) {
+            this._write(Int32Array.of(-1));
+        }
         // Write the flatbuffer size prefix including padding
-        this._write(Int32Array.of(alignedSize - 4));
+        this._write(Int32Array.of(alignedSize - prefixSize));
         // Write the flatbuffer
         if (flatbufferSize > 0) { this._write(buffer); }
         // Write any padding
@@ -212,7 +232,10 @@ export class RecordBatchWriter<T extends { [key: string]: DataType } = any> exte
 
     // @ts-ignore
     protected _writeFooter(schema: Schema<T>) {
-        return this._writePadding(4); // eos bytes
+        // eos bytes
+        return this._writeLegacyIpcFormat
+            ? this._write(Int32Array.of(0))
+            : this._write(Int32Array.of(-1, 0));
     }
 
     protected _writeMagic() {
@@ -275,12 +298,12 @@ export class RecordBatchWriter<T extends { [key: string]: DataType } = any> exte
 
 /** @ignore */
 export class RecordBatchStreamWriter<T extends { [key: string]: DataType } = any> extends RecordBatchWriter<T> {
-    public static writeAll<T extends { [key: string]: DataType } = any>(input: Table<T> | Iterable<RecordBatch<T>>, options?: { autoDestroy: true }): RecordBatchStreamWriter<T>;
-    public static writeAll<T extends { [key: string]: DataType } = any>(input: AsyncIterable<RecordBatch<T>>, options?: { autoDestroy: true }): Promise<RecordBatchStreamWriter<T>>;
-    public static writeAll<T extends { [key: string]: DataType } = any>(input: PromiseLike<AsyncIterable<RecordBatch<T>>>, options?: { autoDestroy: true }): Promise<RecordBatchStreamWriter<T>>;
-    public static writeAll<T extends { [key: string]: DataType } = any>(input: PromiseLike<Table<T> | Iterable<RecordBatch<T>>>, options?: { autoDestroy: true }): Promise<RecordBatchStreamWriter<T>>;
+    public static writeAll<T extends { [key: string]: DataType } = any>(input: Table<T> | Iterable<RecordBatch<T>>, options?: RecordBatchStreamWriterOptions): RecordBatchStreamWriter<T>;
+    public static writeAll<T extends { [key: string]: DataType } = any>(input: AsyncIterable<RecordBatch<T>>, options?: RecordBatchStreamWriterOptions): Promise<RecordBatchStreamWriter<T>>;
+    public static writeAll<T extends { [key: string]: DataType } = any>(input: PromiseLike<AsyncIterable<RecordBatch<T>>>, options?: RecordBatchStreamWriterOptions): Promise<RecordBatchStreamWriter<T>>;
+    public static writeAll<T extends { [key: string]: DataType } = any>(input: PromiseLike<Table<T> | Iterable<RecordBatch<T>>>, options?: RecordBatchStreamWriterOptions): Promise<RecordBatchStreamWriter<T>>;
     /** @nocollapse */
-    public static writeAll<T extends { [key: string]: DataType } = any>(input: any, options?: { autoDestroy: true }) {
+    public static writeAll<T extends { [key: string]: DataType } = any>(input: any, options?: RecordBatchStreamWriterOptions) {
         const writer = new RecordBatchStreamWriter<T>(options);
         if (isPromise<any>(input)) {
             return input.then((x) => writer.writeAll(x));
@@ -323,8 +346,8 @@ export class RecordBatchFileWriter<T extends { [key: string]: DataType } = any> 
             schema, MetadataVersion.V4,
             this._recordBatchBlocks, this._dictionaryBlocks
         ));
-        return this
-            ._writePadding(4) // EOS bytes for sequential readers
+        return super
+            ._writeFooter(schema) // EOS bytes for sequential readers
             ._write(buffer) // Write the flatbuffer
             ._write(Int32Array.of(buffer.byteLength)) // then the footer size suffix
             ._writeMagic(); // then the magic suffix
@@ -355,6 +378,8 @@ export class RecordBatchJSONWriter<T extends { [key: string]: DataType } = any> 
     }
 
     protected _writeMessage() { return this; }
+    // @ts-ignore
+    protected _writeFooter(schema: Schema<T>) { return this; }
     protected _writeSchema(schema: Schema<T>) {
         return this._write(`{\n  "schema": ${
             JSON.stringify({ fields: schema.fields.map(fieldToJSON) }, null, 2)
@@ -430,7 +455,7 @@ async function writeAllAsync<T extends { [key: string]: DataType } = any>(writer
 }
 
 /** @ignore */
-function fieldToJSON({ name, type, nullable }: Field): object {
+function fieldToJSON({ name, type, nullable }: Field): Record<string, unknown> {
     const assembler = new JSONTypeAssembler();
     return {
         'name': name, 'nullable': nullable,

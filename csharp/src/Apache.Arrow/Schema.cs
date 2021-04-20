@@ -15,6 +15,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 
 namespace Apache.Arrow
@@ -53,13 +54,27 @@ namespace Apache.Arrow
             Metadata = metadata?.ToDictionary(kv => kv.Key, kv => kv.Value);
         }
 
+        internal Schema(List<Field> fields, IReadOnlyDictionary<string, string> metadata, bool copyCollections)
+        {
+            Debug.Assert(fields != null);
+            Debug.Assert(copyCollections == false, "This internal constructor is to not copy the collections.");
+
+            _fields = fields;
+
+            _fieldsDictionary = fields.ToDictionary(
+                field => field.Name, field => field,
+                StringComparer.OrdinalIgnoreCase);
+
+            Metadata = metadata;
+        }
+
         public Field GetFieldByIndex(int i)
         {
             return _fields[i];
         }
 
         public Field GetFieldByName(string name) =>
-            Fields.TryGetValue(name, out var field) ? field : null;
+            Fields.TryGetValue(name, out Field field) ? field : null;
 
         public int GetFieldIndex(string name, StringComparer comparer = default)
         {

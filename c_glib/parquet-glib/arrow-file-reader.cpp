@@ -17,10 +17,6 @@
  * under the License.
  */
 
-#ifdef HAVE_CONFIG_H
-#  include <config.h>
-#endif
-
 #include <arrow-glib/arrow-glib.hpp>
 #include <arrow-glib/internal-index.hpp>
 
@@ -117,7 +113,7 @@ gparquet_arrow_file_reader_class_init(GParquetArrowFileReaderClass *klass)
 
   spec = g_param_spec_pointer("arrow-file-reader",
                               "ArrowFileReader",
-                              "The raw std::shared<parquet::arrow::FileReader> *",
+                              "The raw parquet::arrow::FileReader *",
                               static_cast<GParamFlags>(G_PARAM_WRITABLE |
                                                        G_PARAM_CONSTRUCT_ONLY));
   g_object_class_install_property(gobject_class, PROP_ARROW_FILE_READER, spec);
@@ -165,26 +161,24 @@ GParquetArrowFileReader *
 gparquet_arrow_file_reader_new_path(const gchar *path,
                                     GError **error)
 {
-  std::shared_ptr<arrow::io::MemoryMappedFile> arrow_memory_mapped_file;
-  auto status = arrow::io::MemoryMappedFile::Open(path,
-                                                  ::arrow::io::FileMode::READ,
-                                                  &arrow_memory_mapped_file);
-  if (!garrow_error_check(error,
-                          status,
-                          "[parquet][arrow][file-reader][new-path]")) {
+  auto arrow_memory_mapped_file =
+    arrow::io::MemoryMappedFile::Open(path, arrow::io::FileMode::READ);
+  if (!garrow::check(error,
+                     arrow_memory_mapped_file,
+                     "[parquet][arrow][file-reader][new-path]")) {
     return NULL;
   }
 
   std::shared_ptr<arrow::io::RandomAccessFile> arrow_random_access_file =
-    arrow_memory_mapped_file;
+    arrow_memory_mapped_file.ValueOrDie();
   auto arrow_memory_pool = arrow::default_memory_pool();
   std::unique_ptr<parquet::arrow::FileReader> parquet_arrow_file_reader;
-  status = parquet::arrow::OpenFile(arrow_random_access_file,
-                                    arrow_memory_pool,
-                                    &parquet_arrow_file_reader);
-  if (garrow_error_check(error,
-                         status,
-                         "[parquet][arrow][file-reader][new-path]")) {
+  auto status = parquet::arrow::OpenFile(arrow_random_access_file,
+                                         arrow_memory_pool,
+                                         &parquet_arrow_file_reader);
+  if (garrow::check(error,
+                    status,
+                    "[parquet][arrow][file-reader][new-path]")) {
     return gparquet_arrow_file_reader_new_raw(parquet_arrow_file_reader.release());
   } else {
     return NULL;
@@ -217,6 +211,65 @@ gparquet_arrow_file_reader_read_table(GParquetArrowFileReader *reader,
 }
 
 /**
+ * gparquet_arrow_file_reader_read_row_group:
+ * @reader: A #GParquetArrowFileReader.
+ * @row_group_index: A row group index to be read.
+ * @column_indices: (array length=n_column_indices) (nullable):
+ *   Column indices to be read. %NULL means that all columns are read.
+ *   If an index is negative, the index is counted backward from the
+ *   end of the columns. `-1` means the last column.
+ * @n_column_indices: The number of elements of @column_indices.
+ * @error: (nullable): Return locatipcn for a #GError or %NULL.
+ *
+ * Returns: (transfer full) (nullable): A read #GArrowTable.
+ *
+ * Since: 1.0.0
+ */
+GArrowTable *
+gparquet_arrow_file_reader_read_row_group(GParquetArrowFileReader *reader,
+                                          gint row_group_index,
+                                          gint *column_indices,
+                                          gsize n_column_indices,
+                                          GError **error)
+{
+  const gchar *tag = "[parquet][arrow][file-reader][read-row-group]";
+    auto parquet_arrow_file_reader = gparquet_arrow_file_reader_get_raw(reader);
+  std::shared_ptr<arrow::Table> arrow_table;
+  arrow::Status status;
+  if (column_indices) {
+    const auto n_columns =
+      parquet_arrow_file_reader->parquet_reader()->metadata()->num_columns();
+    std::vector<int> parquet_column_indices;
+    for (gsize i = 0; i < n_column_indices; ++i) {
+      auto column_index = column_indices[i];
+      if (!garrow_internal_index_adjust(column_index, n_columns)) {
+        garrow_error_check(error,
+                           arrow::Status::IndexError("Out of index: "
+                                                     "<0..", n_columns, ">: "
+                                                     "<", column_index, ">"),
+                           tag);
+        return NULL;
+      }
+      parquet_column_indices.push_back(column_index);
+    }
+    status =
+      parquet_arrow_file_reader->ReadRowGroup(row_group_index,
+                                              parquet_column_indices,
+                                              &arrow_table);
+  } else {
+    status =
+      parquet_arrow_file_reader->ReadRowGroup(row_group_index, &arrow_table);
+  }
+  if (garrow_error_check(error,
+                         status,
+                         tag)) {
+    return garrow_table_new_raw(&arrow_table);
+  } else {
+    return NULL;
+  }
+}
+
+/**
  * gparquet_arrow_file_reader_get_schema:
  * @reader: A #GParquetArrowFileReader.
  * @error: (nullable): Return locatipcn for a #GError or %NULL.
@@ -231,15 +284,8 @@ gparquet_arrow_file_reader_get_schema(GParquetArrowFileReader *reader,
 {
   auto parquet_arrow_file_reader = gparquet_arrow_file_reader_get_raw(reader);
 
-  const auto n_columns =
-    parquet_arrow_file_reader->parquet_reader()->metadata()->num_columns();
-  std::vector<int> indices(n_columns);
-  for (int i = 0; i < n_columns; ++i) {
-    indices[i] = i;
-  }
-
   std::shared_ptr<arrow::Schema> arrow_schema;
-  auto status = parquet_arrow_file_reader->GetSchema(indices, &arrow_schema);
+  auto status = parquet_arrow_file_reader->GetSchema(&arrow_schema);
   if (garrow_error_check(error,
                          status,
                          "[parquet][arrow][file-reader][get-schema]")) {
@@ -250,52 +296,16 @@ gparquet_arrow_file_reader_get_schema(GParquetArrowFileReader *reader,
 }
 
 /**
- * gparquet_arrow_file_reader_select_schema:
- * @reader: A #GParquetArrowFileReader.
- * @column_indexes: (array length=n_column_indexes):
- *   The array of column indexes to be selected.
- * @n_column_indexes: The length of `column_indexes`.
- * @error: (nullable): Return locatipcn for a #GError or %NULL.
- *
- * Returns: (transfer full) (nullable): A selected #GArrowSchema.
- *
- * Since: 0.12.0
- */
-GArrowSchema *
-gparquet_arrow_file_reader_select_schema(GParquetArrowFileReader *reader,
-                                         gint *column_indexes,
-                                         gsize n_column_indexes,
-                                         GError **error)
-{
-  auto parquet_arrow_file_reader = gparquet_arrow_file_reader_get_raw(reader);
-
-  std::vector<int> indices(n_column_indexes);
-  for (gsize i = 0; i < n_column_indexes; ++i) {
-    indices[i] = column_indexes[i];
-  }
-
-  std::shared_ptr<arrow::Schema> arrow_schema;
-  auto status = parquet_arrow_file_reader->GetSchema(indices, &arrow_schema);
-  if (garrow_error_check(error,
-                         status,
-                         "[parquet][arrow][file-reader][select-schema]")) {
-    return garrow_schema_new_raw(&arrow_schema);
-  } else {
-    return NULL;
-  }
-}
-
-/**
  * gparquet_arrow_file_reader_read_column_data:
  * @reader: A #GParquetArrowFileReader.
- * @i: The index of the column to be read. If it's negative, index is
- *   counted backward from the end of the columns. `-1` means the last
- *   column.
+ * @i: The index of the column to be read.
+ *   If an index is negative, the index is counted backward from the
+ *   end of the columns. `-1` means the last column.
  * @error: (nullable): Return locatipcn for a #GError or %NULL.
  *
  * Returns: (transfer full) (nullable): A read #GArrowChunkedArray.
  *
- * Since: 1.0.0
+ * Since: 0.15.0
  */
 GArrowChunkedArray *
 gparquet_arrow_file_reader_read_column_data(GParquetArrowFileReader *reader,

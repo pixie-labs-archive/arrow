@@ -19,6 +19,7 @@ package org.apache.arrow.vector;
 
 import static org.apache.arrow.vector.NullCheckingForGet.NULL_CHECKING_ENABLED;
 
+import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.complex.impl.DateDayReaderImpl;
 import org.apache.arrow.vector.complex.reader.FieldReader;
@@ -29,14 +30,13 @@ import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.FieldType;
 import org.apache.arrow.vector.util.TransferPair;
 
-import io.netty.buffer.ArrowBuf;
-
 /**
  * DateDayVector implements a fixed width (4 bytes) vector of
  * date values which could be null. A validity buffer (bit vector) is
  * maintained to track which elements in the vector are null.
  */
-public class DateDayVector extends BaseFixedWidthVector {
+public final class DateDayVector extends BaseFixedWidthVector {
+
   private static final byte TYPE_WIDTH = 4;
   private final FieldReader reader;
 
@@ -113,7 +113,7 @@ public class DateDayVector extends BaseFixedWidthVector {
     if (NULL_CHECKING_ENABLED && isSet(index) == 0) {
       throw new IllegalStateException("Value at index is null");
     }
-    return valueBuffer.getInt(index * TYPE_WIDTH);
+    return valueBuffer.getInt((long) index * TYPE_WIDTH);
   }
 
   /**
@@ -129,7 +129,7 @@ public class DateDayVector extends BaseFixedWidthVector {
       return;
     }
     holder.isSet = 1;
-    holder.value = valueBuffer.getInt(index * TYPE_WIDTH);
+    holder.value = valueBuffer.getInt((long) index * TYPE_WIDTH);
   }
 
   /**
@@ -142,7 +142,7 @@ public class DateDayVector extends BaseFixedWidthVector {
     if (isSet(index) == 0) {
       return null;
     } else {
-      return valueBuffer.getInt(index * TYPE_WIDTH);
+      return valueBuffer.getInt((long) index * TYPE_WIDTH);
     }
   }
 
@@ -154,7 +154,7 @@ public class DateDayVector extends BaseFixedWidthVector {
 
 
   private void setValue(int index, int value) {
-    valueBuffer.setInt(index * TYPE_WIDTH, value);
+    valueBuffer.setInt((long) index * TYPE_WIDTH, value);
   }
 
   /**
@@ -164,7 +164,7 @@ public class DateDayVector extends BaseFixedWidthVector {
    * @param value   value of element
    */
   public void set(int index, int value) {
-    BitVectorHelper.setValidityBitToOne(validityBuffer, index);
+    BitVectorHelper.setBit(validityBuffer, index);
     setValue(index, value);
   }
 
@@ -180,10 +180,10 @@ public class DateDayVector extends BaseFixedWidthVector {
     if (holder.isSet < 0) {
       throw new IllegalArgumentException();
     } else if (holder.isSet > 0) {
-      BitVectorHelper.setValidityBitToOne(validityBuffer, index);
+      BitVectorHelper.setBit(validityBuffer, index);
       setValue(index, holder.value);
     } else {
-      BitVectorHelper.setValidityBit(validityBuffer, index, 0);
+      BitVectorHelper.unsetBit(validityBuffer, index);
     }
   }
 
@@ -194,7 +194,7 @@ public class DateDayVector extends BaseFixedWidthVector {
    * @param holder  data holder for value of element
    */
   public void set(int index, DateDayHolder holder) {
-    BitVectorHelper.setValidityBitToOne(validityBuffer, index);
+    BitVectorHelper.setBit(validityBuffer, index);
     setValue(index, holder.value);
   }
 
@@ -238,18 +238,6 @@ public class DateDayVector extends BaseFixedWidthVector {
   }
 
   /**
-   * Set the element at the given index to null.
-   *
-   * @param index   position of element
-   */
-  public void setNull(int index) {
-    handleSafe(index);
-    // not really needed to set the bit to 0 as long as
-    // the buffer always starts from 0.
-    BitVectorHelper.setValidityBit(validityBuffer, index, 0);
-  }
-
-  /**
    * Store the given value at a particular position in the vector. isSet indicates
    * whether the value is NULL or not.
    *
@@ -261,7 +249,7 @@ public class DateDayVector extends BaseFixedWidthVector {
     if (isSet > 0) {
       set(index, value);
     } else {
-      BitVectorHelper.setValidityBit(validityBuffer, index, 0);
+      BitVectorHelper.unsetBit(validityBuffer, index);
     }
   }
 
@@ -290,7 +278,7 @@ public class DateDayVector extends BaseFixedWidthVector {
    * @return value stored at the index.
    */
   public static int get(final ArrowBuf buffer, final int index) {
-    return buffer.getInt(index * TYPE_WIDTH);
+    return buffer.getInt((long) index * TYPE_WIDTH);
   }
 
 
@@ -302,7 +290,7 @@ public class DateDayVector extends BaseFixedWidthVector {
 
 
   /**
-   * Construct a TransferPair comprising of this and and a target vector of
+   * Construct a TransferPair comprising of this and a target vector of
    * the same type.
    *
    * @param ref name of the target vector

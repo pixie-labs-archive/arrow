@@ -15,61 +15,135 @@
 # specific language governing permissions and limitations
 # under the License.
 
+{% import 'macros.jinja' as macros with context %}
+
+arch: arm64-graviton2
+virt: vm
 os: linux
-dist: xenial
-language: ruby
-
-# don't build twice
-if: tag IS blank
-
-services:
-  - docker
+dist: focal
+group: edge
+language: minimal
 
 addons:
   apt:
     packages:
-      - qemu-user-static
-      - unar
+      - apt-utils
+      # We need Ubuntu 20.10 or later
+      # - createrepo_c
+      - devscripts
+      - gpg
+      - libgit2-dev
+      - python3-pip
+      - rake
+      - rpm
+
+      # To build createrepo_c from source.
+      # We can remove them when we can install createrepo_c package
+      - cmake
+      - libbz2-dev
+      - libcurl4-openssl-dev
+      - libglib2.0-dev
+      - liblzma-dev
+      - libmagic-dev
+      - librpm-dev
+      - libsqlite3-dev
+      - libssl-dev
+      - libxml2-dev
+      - libzstd-dev
+      - pkg-config
+      - zlib1g-dev
+
+services:
+  - docker
+
+# don't build twice
+if: tag IS blank
 
 env:
   global:
-    - TRAVIS_TAG={{ task.tag }}
-    - BUILD_REF={{ arrow.head }}
+    - APT_TARGETS={{ target }}
     - ARROW_VERSION={{ arrow.version }}
+    - BUILD_REF={{ arrow.head }}
+    - TRAVIS_TAG={{ task.tag }}
+    - YUM_TARGETS={{ target }}
 
 before_script:
-  - git clone --no-checkout {{ arrow.remote }} arrow
-  - git -C arrow fetch -t {{ arrow.remote }} {{ arrow.branch }}
-  - git -C arrow checkout FETCH_HEAD
+  - set -e
+  {{ macros.travis_checkout_arrow() }}
+  {{ macros.travis_docker_login() }}
+
+  # Build createrepo_c from source.
+  # We can remove them when we can install createrepo_c package
+  - git clone --depth 1 https://github.com/rpm-software-management/createrepo_c.git
+  - pushd createrepo_c
+  - |
+      /usr/bin/cmake \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DENABLE_BASHCOMP=OFF \
+        -DENABLE_DRPM=OFF \
+        -DENABLE_PYTHON=OFF \
+        -DWITH_LIBMODULEMD=OFF \
+        -DWITH_ZCHUNK=OFF \
+        .
+  - make -j$(nproc)
+  - sudo make install
+  - popd
+  - rm -rf createrepo_c
 
 script:
+  # Build packages
   - pushd arrow/dev/tasks/linux-packages
   - rake version:update
-  - rake dist
-  # We can remove this with binfmt-support 2.1.7 or later and
-  # qemu-user-static 2.12 or later. It requires Debian buster or later,
-  # or Ubuntu 18.10 or later.
-  - wget http://archive.ubuntu.com/ubuntu/pool/universe/q/qemu/qemu-user-static_3.1+dfsg-2ubuntu5_amd64.deb
-  - unar *.deb
-  - rm *.deb
-  - pushd qemu-user-static*
-  - unar data.*
-  - cp data/usr/bin/qemu-aarch64-static ../apt/debian-stretch-arm64/
+  - |
+      rake docker:pull || :
+  - pushd apache-arrow-apt-source/apt
+  - |
+      for target in debian-* ubuntu-*; do
+        cp -a ${target} ${target}-arm64
+      done
   - popd
-  - {{ build_command }}
+  - pushd apache-arrow-release/yum
+  - |
+      for target in centos-*; do
+        cp -a ${target} ${target}-aarch64
+      done
+  - popd
+  - |
+      rake \
+        --trace \
+        {{ task_namespace }}:build \
+        BUILD_DIR=build \
+        DEB_BUILD_OPTIONS=parallel=2 \
+        RPM_BUILD_NCPUS=2
+  - sudo rm -rf */*/build
+  - popd
+  # Push Docker image
+  - pushd arrow/dev/tasks/linux-packages
+  - |
+      docker login -u "${DOCKERHUB_USER}" \
+                   -p "${DOCKERHUB_TOKEN}" || :
+  - |
+      rake docker:push || :
+  - popd
+  # Test built packages
+  - |
+      (echo "Key-Type: RSA"; \
+       echo "Key-Length: 4096"; \
+       echo "Name-Real: Test"; \
+       echo "Name-Email: test@example.com"; \
+       echo "%no-protection") | \
+        gpg --full-generate-key --batch
+  - |
+      GPG_KEY_ID=$(gpg --list-keys --with-colon test@example.com | grep fpr | cut -d: -f10)
+  - gpg --export --armor test@example.com > arrow/dev/tasks/linux-packages/KEYS
+  - pushd arrow/dev/tasks/linux-packages
+  - |
+      rake --trace {{ task_namespace }}:test \
+        CREATEREPO=createrepo_c \
+        GPG_KEY_ID=${GPG_KEY_ID}
+  - rm -rf {{ task_namespace }}/repositories
+  - popd
 
-deploy:
-  provider: releases
-  api_key: $CROSSBOW_GITHUB_TOKEN
-  file_glob: true
-  file:
-  {% for extension in upload_extensions -%}
-    - "**/*{{ extension }}"
-  {% endfor -%}
-  skip_cleanup: true
-  on:
-    tags: true
-
-notifications:
-  email:
-    - {{ job.email }}
+after_success:
+  {% set patterns = upload_extensions | format_all("arrow/dev/tasks/linux-packages/**/*{}") %}
+  {{ macros.travis_upload_releases(patterns) }}

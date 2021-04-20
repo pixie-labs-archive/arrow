@@ -25,7 +25,7 @@ import (
 	"github.com/apache/arrow/go/arrow/internal/debug"
 	"github.com/apache/arrow/go/arrow/internal/flatbuf"
 	"github.com/apache/arrow/go/arrow/memory"
-	"github.com/pkg/errors"
+	"golang.org/x/xerrors"
 )
 
 // MetadataVersion represents the Arrow metadata version.
@@ -36,10 +36,11 @@ const (
 	MetadataV2 = MetadataVersion(flatbuf.MetadataVersionV2) // version for Arrow-0.2.0
 	MetadataV3 = MetadataVersion(flatbuf.MetadataVersionV3) // version for Arrow-0.3.0 to 0.7.1
 	MetadataV4 = MetadataVersion(flatbuf.MetadataVersionV4) // version for >= Arrow-0.8.0
+	MetadataV5 = MetadataVersion(flatbuf.MetadataVersionV5) // version for >= Arrow-1.0.0, backward compatible with v4
 )
 
 func (m MetadataVersion) String() string {
-	if v, ok := flatbuf.EnumNamesMetadataVersion[int16(m)]; ok {
+	if v, ok := flatbuf.EnumNamesMetadataVersion[flatbuf.MetadataVersion(m)]; ok {
 		return v
 	}
 	return fmt.Sprintf("MetadataVersion(%d)", int16(m))
@@ -58,7 +59,7 @@ const (
 )
 
 func (m MessageType) String() string {
-	if v, ok := flatbuf.EnumNamesMessageHeader[byte(m)]; ok {
+	if v, ok := flatbuf.EnumNamesMessageHeader[flatbuf.MessageHeader(m)]; ok {
 		return v
 	}
 	return fmt.Sprintf("MessageType(%d)", int(m))
@@ -141,8 +142,14 @@ func (msg *Message) BodyLen() int64 {
 	return msg.msg.BodyLength()
 }
 
+type MessageReader interface {
+	Message() (*Message, error)
+	Release()
+	Retain()
+}
+
 // MessageReader reads messages from an io.Reader.
-type MessageReader struct {
+type messageReader struct {
 	r io.Reader
 
 	refCount int64
@@ -150,20 +157,20 @@ type MessageReader struct {
 }
 
 // NewMessageReader returns a reader that reads messages from an input stream.
-func NewMessageReader(r io.Reader) *MessageReader {
-	return &MessageReader{r: r, refCount: 1}
+func NewMessageReader(r io.Reader) MessageReader {
+	return &messageReader{r: r, refCount: 1}
 }
 
 // Retain increases the reference count by 1.
 // Retain may be called simultaneously from multiple goroutines.
-func (r *MessageReader) Retain() {
+func (r *messageReader) Retain() {
 	atomic.AddInt64(&r.refCount, 1)
 }
 
 // Release decreases the reference count by 1.
 // When the reference count goes to zero, the memory is freed.
 // Release may be called simultaneously from multiple goroutines.
-func (r *MessageReader) Release() {
+func (r *messageReader) Release() {
 	debug.Assert(atomic.LoadInt64(&r.refCount) > 0, "too many releases")
 
 	if atomic.AddInt64(&r.refCount, -1) == 0 {
@@ -177,22 +184,41 @@ func (r *MessageReader) Release() {
 // Message returns the current message that has been extracted from the
 // underlying stream.
 // It is valid until the next call to Message.
-func (r *MessageReader) Message() (*Message, error) {
+func (r *messageReader) Message() (*Message, error) {
 	var buf = make([]byte, 4)
 	_, err := io.ReadFull(r.r, buf)
 	if err != nil {
-		return nil, errors.Wrap(err, "arrow/ipc: could not read message length")
+		return nil, xerrors.Errorf("arrow/ipc: could not read continuation indicator: %w", err)
 	}
-	msgLen := int32(binary.LittleEndian.Uint32(buf))
-	if msgLen == 0 {
-		// optional 0 EOS control message
+	var (
+		cid    = binary.LittleEndian.Uint32(buf)
+		msgLen int32
+	)
+	switch cid {
+	case 0:
+		// EOS message.
 		return nil, io.EOF // FIXME(sbinet): send nil instead? or a special EOS error?
+	case kIPCContToken:
+		_, err = io.ReadFull(r.r, buf)
+		if err != nil {
+			return nil, xerrors.Errorf("arrow/ipc: could not read message length: %w", err)
+		}
+		msgLen = int32(binary.LittleEndian.Uint32(buf))
+		if msgLen == 0 {
+			// optional 0 EOS control message
+			return nil, io.EOF // FIXME(sbinet): send nil instead? or a special EOS error?
+		}
+
+	default:
+		// ARROW-6314: backwards compatibility for reading old IPC
+		// messages produced prior to version 0.15.0
+		msgLen = int32(cid)
 	}
 
 	buf = make([]byte, msgLen)
 	_, err = io.ReadFull(r.r, buf)
 	if err != nil {
-		return nil, errors.Wrap(err, "arrow/ipc: could not read message metadata")
+		return nil, xerrors.Errorf("arrow/ipc: could not read message metadata: %w", err)
 	}
 
 	meta := flatbuf.GetRootAsMessage(buf, 0)
@@ -201,7 +227,7 @@ func (r *MessageReader) Message() (*Message, error) {
 	buf = make([]byte, bodyLen)
 	_, err = io.ReadFull(r.r, buf)
 	if err != nil {
-		return nil, errors.Wrap(err, "arrow/ipc: could not read message body")
+		return nil, xerrors.Errorf("arrow/ipc: could not read message body: %w", err)
 	}
 	body := memory.NewBufferBytes(buf)
 

@@ -29,10 +29,10 @@ const {
 const fs = require('fs');
 const gulp = require('gulp');
 const path = require('path');
+const mkdirp = require('mkdirp');
 const sourcemaps = require('gulp-sourcemaps');
 const { memoizeTask } = require('./memoize-task');
 const { compileBinFiles } = require('./typescript-task');
-const mkdirp = require('util').promisify(require('mkdirp'));
 const closureCompiler = require('google-closure-compiler').gulp();
 
 const closureTask = ((cache) => memoizeTask(cache, async function closure(target, format) {
@@ -58,7 +58,7 @@ const closureTask = ((cache) => memoizeTask(cache, async function closure(target
 
     await Promise.all([
         fs.promises.writeFile(externs, generateExternsFile(exportedImports)),
-        fs.promises.writeFile(entry_point, generateUMDExportAssignnent(srcAbsolute, exportedImports))
+        fs.promises.writeFile(entry_point, generateUMDExportAssignment(srcAbsolute, exportedImports))
     ]);
 
     return await Promise.all([
@@ -77,7 +77,9 @@ const closureTask = ((cache) => memoizeTask(cache, async function closure(target
                 `${src}/**/*.js` /* <-- then source globs */
             ], { base: `./` }),
             sourcemaps.init(),
-            closureCompiler(createClosureArgs(entry_point, externs)),
+            closureCompiler(createClosureArgs(entry_point, externs), {
+                platform: ['native', 'java', 'javascript']
+            }),
             // rename the sourcemaps from *.js.map files to *.min.js.map
             sourcemaps.write(`.`, { mapFile: (mapPath) => mapPath.replace(`.js.map`, `.${target}.min.js.map`) }),
             gulp.dest(out)
@@ -93,7 +95,7 @@ const createClosureArgs = (entry_point, externs) => ({
     entry_point,
     third_party: true,
     warning_level: `QUIET`,
-    dependency_mode: `STRICT`,
+    dependency_mode: `PRUNE`,
     rewrite_polyfills: false,
     module_resolution: `NODE`,
     // formatting: `PRETTY_PRINT`,
@@ -112,7 +114,7 @@ const createClosureArgs = (entry_point, externs) => ({
 }(this, (function (exports) {%output%}.bind(this))));`
 });
 
-function generateUMDExportAssignnent(src, exportedImports) {
+function generateUMDExportAssignment(src, exportedImports) {
     return [
         ...exportedImports.map(({ publicModulePath }, i) => {
             const p = publicModulePath.slice(src.length + 1);
@@ -148,7 +150,7 @@ function externBody({ exportName, staticNames, instanceNames }) {
 function externsHeader() {
     return (`${apacheHeader()}
 // @ts-nocheck
-/* tslint:disable */
+/* eslint-disable */
 /**
  * @fileoverview Closure Compiler externs for Arrow
  * @externs
@@ -209,5 +211,5 @@ function apacheHeader() {
 // "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
-// under the License.`
+// under the License.`;
 }

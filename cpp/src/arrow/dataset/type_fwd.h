@@ -15,57 +15,81 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// This API is EXPERIMENTAL.
+
 #pragma once
 
 #include <memory>
 #include <vector>
 
 #include "arrow/dataset/visibility.h"
-#include "arrow/type_fwd.h"  // IWYU pragma: export
+#include "arrow/filesystem/type_fwd.h"  // IWYU pragma: export
+#include "arrow/type_fwd.h"             // IWYU pragma: export
 
 namespace arrow {
+namespace compute {
 
-namespace fs {
+class ExecContext;
 
-class FileSystem;
-
-}  // namespace fs
+}  // namespace compute
 
 namespace dataset {
 
 class Dataset;
-class DataFragment;
-class DataSource;
-struct DataSelector;
-using DataFragmentIterator = Iterator<std::shared_ptr<DataFragment>>;
-using DataFragmentVector = std::vector<std::shared_ptr<DataFragment>>;
+class DatasetFactory;
+using DatasetVector = std::vector<std::shared_ptr<Dataset>>;
 
-struct DiscoveryOptions;
+class UnionDataset;
+class UnionDatasetFactory;
 
-class FileBasedDataFragment;
+class Fragment;
+using FragmentIterator = Iterator<std::shared_ptr<Fragment>>;
+using FragmentVector = std::vector<std::shared_ptr<Fragment>>;
+
+class FragmentScanOptions;
+
+class FileSource;
 class FileFormat;
-class FileScanOptions;
+class FileFragment;
+class FileWriter;
 class FileWriteOptions;
+class FileSystemDataset;
+class FileSystemDatasetFactory;
+struct FileSystemDatasetWriteOptions;
 
-class Filter;
-using FilterVector = std::vector<std::shared_ptr<Filter>>;
+class InMemoryDataset;
 
-class Partition;
-class PartitionKey;
-class PartitionScheme;
-using PartitionVector = std::vector<std::shared_ptr<Partition>>;
-using PartitionIterator = Iterator<std::shared_ptr<Partition>>;
+class CsvFileFormat;
+struct CsvFragmentScanOptions;
 
-struct ScanContext;
-class ScanOptions;
+class IpcFileFormat;
+class IpcFileWriter;
+class IpcFileWriteOptions;
+class IpcFragmentScanOptions;
+
+class ParquetFileFormat;
+class ParquetFileFragment;
+class ParquetFragmentScanOptions;
+class ParquetFileWriter;
+class ParquetFileWriteOptions;
+
+class Expression;
+
+class Partitioning;
+class PartitioningFactory;
+class PartitioningOrFactory;
+class DirectoryPartitioning;
+class HivePartitioning;
+
+struct ScanOptions;
+
 class Scanner;
-class ScannerBuilder;
-class ScanTask;
-using ScanTaskIterator = Iterator<std::unique_ptr<ScanTask>>;
 
-class DatasetWriter;
-class WriteContext;
-class WriteOptions;
+class ScannerBuilder;
+
+class ScanTask;
+using ScanTaskVector = std::vector<std::shared_ptr<ScanTask>>;
+using ScanTaskIterator = Iterator<std::shared_ptr<ScanTask>>;
 
 }  // namespace dataset
 }  // namespace arrow

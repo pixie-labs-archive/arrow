@@ -18,17 +18,15 @@
 # distutils: language = c++
 # cython: language_level = 3
 
-from __future__ import absolute_import
-
 from libc.string cimport const_char
 from libcpp.vector cimport vector as std_vector
 from pyarrow.includes.common cimport *
 from pyarrow.includes.libarrow cimport (CArray, CSchema, CStatus,
-                                        CTable, CMemoryPool,
+                                        CResult, CTable, CMemoryPool,
                                         CKeyValueMetadata,
                                         CRecordBatch,
                                         CTable,
-                                        RandomAccessFile, OutputStream,
+                                        CRandomAccessFile, COutputStream,
                                         TimeUnit)
 
 
@@ -37,7 +35,7 @@ cdef extern from "arrow/adapters/orc/adapter.h" \
 
     cdef cppclass ORCFileReader:
         @staticmethod
-        CStatus Open(const shared_ptr[RandomAccessFile]& file,
+        CStatus Open(const shared_ptr[CRandomAccessFile]& file,
                      CMemoryPool* pool,
                      unique_ptr[ORCFileReader]* reader)
 
@@ -53,3 +51,11 @@ cdef extern from "arrow/adapters/orc/adapter.h" \
         int64_t NumberOfStripes()
 
         int64_t NumberOfRows()
+
+    cdef cppclass ORCFileWriter:
+        @staticmethod
+        CResult[unique_ptr[ORCFileWriter]] Open(COutputStream* output_stream)
+
+        CStatus Write(const CTable& table)
+
+        CStatus Close()

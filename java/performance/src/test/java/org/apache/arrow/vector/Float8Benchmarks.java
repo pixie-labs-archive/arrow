@@ -22,7 +22,6 @@ import java.util.concurrent.TimeUnit;
 import org.apache.arrow.memory.BoundsChecking;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
-import org.junit.Test;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Mode;
@@ -64,7 +63,7 @@ public class Float8Benchmarks {
     fromVector = new Float8Vector("vector", allocator);
     fromVector.allocateNew(VECTOR_LENGTH);
 
-    for (int i = 0;i < VECTOR_LENGTH; i++) {
+    for (int i = 0; i < VECTOR_LENGTH; i++) {
       if (i % 3 == 0) {
         fromVector.setNull(i);
       } else {
@@ -112,8 +111,7 @@ public class Float8Benchmarks {
     }
   }
 
-  @Test
-  public void evaluate() throws RunnerException {
+  public static void main(String [] args) throws RunnerException {
     Options opt = new OptionsBuilder()
             .include(Float8Benchmarks.class.getSimpleName())
             .forks(1)

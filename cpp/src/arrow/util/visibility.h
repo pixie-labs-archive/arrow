@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#ifndef ARROW_UTIL_VISIBILITY_H
-#define ARROW_UTIL_VISIBILITY_H
+#pragma once
 
 #if defined(_WIN32) || defined(__CYGWIN__)
 #if defined(_MSC_VER)
@@ -34,13 +33,13 @@
 #endif
 
 #define ARROW_NO_EXPORT
+#define ARROW_FORCE_INLINE __forceinline
 #else  // Not Windows
 #ifndef ARROW_EXPORT
 #define ARROW_EXPORT __attribute__((visibility("default")))
 #endif
 #ifndef ARROW_NO_EXPORT
 #define ARROW_NO_EXPORT __attribute__((visibility("hidden")))
+#define ARROW_FORCE_INLINE
 #endif
 #endif  // Non-Windows
-
-#endif  // ARROW_UTIL_VISIBILITY_H

@@ -22,9 +22,12 @@ package org.apache.arrow.vector.ipc.message;
  */
 public interface ArrowMessage extends FBSerializable, AutoCloseable {
 
-  int computeBodyLength();
+  long computeBodyLength();
 
   <T> T accepts(ArrowMessageVisitor<T> visitor);
+
+  /** Returns the flatbuffer enum value indicating the type of the message. */
+  byte getMessageType();
 
   /**
    * Visitor interface for implementations of {@link ArrowMessage}.

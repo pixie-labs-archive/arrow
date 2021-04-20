@@ -16,13 +16,26 @@
 # specific language governing permissions and limitations
 # under the License.
 
+import functools
+import operator
 import sys
 from setuptools import setup
 
+if sys.version_info < (3, 6):
+    sys.exit('Python < 3.6 is not supported')
 
-if sys.version_info < (3, 5):
-    sys.exit('Python < 3.5 is not supported')
+# For pathlib.Path compatibility
+jinja_req = 'jinja2>=2.11'
 
+extras = {
+    'benchmark': ['pandas'],
+    'docker': ['ruamel.yaml', 'python-dotenv'],
+    'release': [jinja_req, 'jira', 'semver', 'gitpython'],
+    'crossbow': ['github3.py', jinja_req, 'pygit2', 'ruamel.yaml',
+                 'setuptools_scm'],
+}
+extras['bot'] = extras['crossbow'] + ['pygithub', 'jira']
+extras['all'] = list(set(functools.reduce(operator.add, extras.values())))
 
 setup(
     name='archery',
@@ -31,10 +44,19 @@ setup(
     url='http://github.com/apache/arrow',
     maintainer='Arrow Developers',
     maintainer_email='dev@arrow.apache.org',
-    packages=['archery'],
-    install_requires=['click', 'pandas'],
+    packages=[
+        'archery',
+        'archery.benchmark',
+        'archery.integration',
+        'archery.lang',
+        'archery.utils'
+    ],
+    include_package_data=True,
+    install_requires=['click>=7'],
+    tests_require=['pytest', 'responses'],
+    extras_require=extras,
     entry_points='''
         [console_scripts]
         archery=archery.cli:archery
-    ''',
+    '''
 )

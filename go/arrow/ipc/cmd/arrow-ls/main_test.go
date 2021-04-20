@@ -31,6 +31,12 @@ import (
 )
 
 func TestLsStream(t *testing.T) {
+	tempDir, err := ioutil.TempDir("", "go-arrow-ls-stream-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
 	for _, tc := range []struct {
 		name string
 		want string
@@ -119,7 +125,7 @@ records: 3
 			defer mem.AssertSize(t, 0)
 
 			fname := func() string {
-				f, err := ioutil.TempFile("", "go-arrow-")
+				f, err := ioutil.TempFile(tempDir, "go-arrow-ls-stream-")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -147,7 +153,6 @@ records: 3
 
 				return f.Name()
 			}()
-			defer os.Remove(fname)
 
 			f, err := os.Open(fname)
 			if err != nil {
@@ -169,6 +174,12 @@ records: 3
 }
 
 func TestLsFile(t *testing.T) {
+	tempDir, err := ioutil.TempDir("", "go-arrow-ls-file-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
 	for _, tc := range []struct {
 		stream bool
 		name   string
@@ -196,7 +207,7 @@ records: 3
 		},
 		{
 			name: "primitives",
-			want: `version: V4
+			want: `version: V5
 schema:
   fields: 11
     - bools: type=bool, nullable
@@ -225,7 +236,7 @@ records: 2
 		},
 		{
 			name: "structs",
-			want: `version: V4
+			want: `version: V5
 schema:
   fields: 1
     - struct_nullable: type=struct<f1: int32, f2: utf8>, nullable
@@ -243,7 +254,7 @@ records: 4
 		},
 		{
 			name: "lists",
-			want: `version: V4
+			want: `version: V5
 schema:
   fields: 1
     - list_nullable: type=list<item: int32>, nullable
@@ -261,7 +272,7 @@ records: 3
 		},
 		{
 			name: "fixed_size_binaries",
-			want: `version: V4
+			want: `version: V5
 schema:
   fields: 1
     - fixed_size_binary_3: type=fixed_size_binary[3], nullable
@@ -274,7 +285,7 @@ records: 3
 			defer mem.AssertSize(t, 0)
 
 			fname := func() string {
-				f, err := ioutil.TempFile("", "go-arrow-")
+				f, err := ioutil.TempFile(tempDir, "go-arrow-ls-file-")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -315,7 +326,6 @@ records: 3
 
 				return f.Name()
 			}()
-			defer os.Remove(fname)
 
 			w := new(bytes.Buffer)
 			err := processFile(w, fname)

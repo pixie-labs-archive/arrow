@@ -46,7 +46,7 @@ fn main() -> Result<()> {
     let nested = StructArray::from(vec![
         (
             Field::new("a", DataType::Utf8, false),
-            Arc::new(BinaryArray::from(vec!["a", "b", "c", "d", "e"])) as Arc<dyn Array>,
+            Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e"])) as Arc<dyn Array>,
         ),
         (
             Field::new("b", DataType::Float64, false),
@@ -62,7 +62,8 @@ fn main() -> Result<()> {
     let batch =
         RecordBatch::try_new(Arc::new(schema), vec![Arc::new(id), Arc::new(nested)])?;
 
-    Ok(process(&batch))
+    process(&batch);
+    Ok(())
 }
 
 /// Create a new batch by performing a projection of id, nested.c
@@ -94,7 +95,7 @@ fn process(batch: &RecordBatch) {
         Arc::new(projected_schema),
         vec![
             id.clone(), // NOTE: this is cloning the Arc not the array data
-            Arc::new(Float64Array::from(nested_c.data())),
+            Arc::new(Float64Array::from(nested_c.data().clone())),
         ],
     );
 }

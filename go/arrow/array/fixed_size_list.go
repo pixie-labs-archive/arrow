@@ -22,7 +22,7 @@ import (
 	"sync/atomic"
 
 	"github.com/apache/arrow/go/arrow"
-	"github.com/apache/arrow/go/arrow/internal/bitutil"
+	"github.com/apache/arrow/go/arrow/bitutil"
 	"github.com/apache/arrow/go/arrow/internal/debug"
 	"github.com/apache/arrow/go/arrow/memory"
 )
@@ -125,7 +125,7 @@ func NewFixedSizeListBuilder(mem memory.Allocator, n int32, etype arrow.DataType
 		builder: builder{refCount: 1, mem: mem},
 		etype:   etype,
 		n:       n,
-		values:  newBuilder(mem, etype),
+		values:  NewBuilder(mem, etype),
 	}
 }
 

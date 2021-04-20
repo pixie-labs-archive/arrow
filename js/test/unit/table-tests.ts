@@ -18,10 +18,11 @@
 import '../jest-extensions';
 import {
     predicate,
-    Data, Schema, Table, RecordBatch, Column,
+    Data, Schema, Field, Table, RecordBatch, Column,
     Vector, Int32Vector, Float32Vector, Utf8Vector, DictionaryVector,
     Struct, Float32, Int32, Dictionary, Utf8, Int8
 } from '../Arrow';
+import { arange } from './utils';
 
 const { col, lit, custom, and, or, And, Or } = predicate;
 
@@ -72,7 +73,7 @@ const test_data = [
 ];
 
 function compareBatchAndTable(source: Table, offset: number, batch: RecordBatch, table: Table) {
-    expect(batch.length).toEqual(table.length);
+    expect(batch).toHaveLength(table.length);
     expect(table.numCols).toEqual(source.numCols);
     expect(batch.numCols).toEqual(source.numCols);
     for (let i = -1, n = source.numCols; ++i < n;) {
@@ -87,31 +88,25 @@ function compareBatchAndTable(source: Table, offset: number, batch: RecordBatch,
 
 describe(`Table`, () => {
     test(`can create an empty table`, () => {
-        expect(Table.empty().length).toEqual(0);
+        expect(Table.empty()).toHaveLength(0);
     });
     test(`Table.from([]) creates an empty table`, () => {
-        expect(Table.from([]).length).toEqual(0);
+        expect(Table.from([])).toHaveLength(0);
     });
     test(`Table.from() creates an empty table`, () => {
-        expect(Table.from().length).toEqual(0);
+        expect(Table.from()).toHaveLength(0);
     });
 
     describe(`new()`, () => {
-
-        const arange = <T extends { length: number; [n: number]: number; }>(arr: T, n = arr.length) => {
-            for (let i = -1; ++i < n; arr[i] = i) { }
-            return arr;
-        };
-
         test(`creates an empty Table with Columns`, () => {
             let i32 = Column.new('i32', Data.new(new Int32(), 0, 0));
             let f32 = Column.new('f32', Data.new(new Float32(), 0, 0));
             const table = Table.new(i32, f32);
             i32 = table.getColumn('i32')!;
             f32 = table.getColumn('f32')!;
-            expect(table.length).toBe(0);
-            expect(i32.length).toBe(0);
-            expect(f32.length).toBe(0);
+            expect(table).toHaveLength(0);
+            expect(i32).toHaveLength(0);
+            expect(f32).toHaveLength(0);
             expect(i32.toArray()).toBeInstanceOf(Int32Array);
             expect(f32.toArray()).toBeInstanceOf(Float32Array);
         });
@@ -122,7 +117,7 @@ describe(`Table`, () => {
 
             let i32 = Column.new('i32', Data.Int(new Int32(), 0, i32s.length, 0, null, i32s));
             expect(i32.name).toBe('i32');
-            expect(i32.length).toBe(i32s.length);
+            expect(i32).toHaveLength(i32s.length);
             expect(i32.nullable).toBe(true);
             expect(i32.nullCount).toBe(0);
 
@@ -130,7 +125,7 @@ describe(`Table`, () => {
             i32 = table.getColumnAt(0)!;
 
             expect(i32.name).toBe('i32');
-            expect(i32.length).toBe(i32s.length);
+            expect(i32).toHaveLength(i32s.length);
             expect(i32.nullable).toBe(true);
             expect(i32.nullCount).toBe(0);
 
@@ -146,8 +141,8 @@ describe(`Table`, () => {
             let f32 = Column.new('f32', Data.Float(new Float32(), 0, f32s.length, 0, null, f32s));
             expect(i32.name).toBe('i32');
             expect(f32.name).toBe('f32');
-            expect(i32.length).toBe(i32s.length);
-            expect(f32.length).toBe(f32s.length);
+            expect(i32).toHaveLength(i32s.length);
+            expect(f32).toHaveLength(f32s.length);
             expect(i32.nullable).toBe(true);
             expect(f32.nullable).toBe(true);
             expect(i32.nullCount).toBe(0);
@@ -159,8 +154,8 @@ describe(`Table`, () => {
 
             expect(i32.name).toBe('i32');
             expect(f32.name).toBe('f32');
-            expect(i32.length).toBe(i32s.length);
-            expect(f32.length).toBe(f32s.length);
+            expect(i32).toHaveLength(i32s.length);
+            expect(f32).toHaveLength(f32s.length);
             expect(i32.nullable).toBe(true);
             expect(f32.nullable).toBe(true);
             expect(i32.nullCount).toBe(0);
@@ -180,8 +175,8 @@ describe(`Table`, () => {
 
             expect(i32.name).toBe('i32');
             expect(f32.name).toBe('f32');
-            expect(i32.length).toBe(i32s.length);
-            expect(f32.length).toBe(f32s.length);
+            expect(i32).toHaveLength(i32s.length);
+            expect(f32).toHaveLength(f32s.length);
             expect(i32.nullable).toBe(true);
             expect(f32.nullable).toBe(true);
             expect(i32.nullCount).toBe(0);
@@ -193,8 +188,8 @@ describe(`Table`, () => {
 
             expect(i32.name).toBe('i32');
             expect(f32.name).toBe('f32');
-            expect(i32.length).toBe(i32s.length);
-            expect(f32.length).toBe(i32s.length); // new length should be the same as the longest sibling
+            expect(i32).toHaveLength(i32s.length);
+            expect(f32).toHaveLength(i32s.length); // new length should be the same as the longest sibling
             expect(i32.nullable).toBe(true);
             expect(f32.nullable).toBe(true); // true, with 12 additional nulls
             expect(i32.nullCount).toBe(0);
@@ -219,8 +214,8 @@ describe(`Table`, () => {
 
             expect(i32.name).toBe('i32');
             expect(f32.name).toBe('f32');
-            expect(i32.length).toBe(i32s.length);
-            expect(f32.length).toBe(f32s.length);
+            expect(i32).toHaveLength(i32s.length);
+            expect(f32).toHaveLength(f32s.length);
             expect(i32.nullable).toBe(true);
             expect(f32.nullable).toBe(true);
             expect(i32.nullCount).toBe(0);
@@ -232,8 +227,8 @@ describe(`Table`, () => {
 
             expect(i32.name).toBe('i32Renamed');
             expect(f32.name).toBe('f32Renamed');
-            expect(i32.length).toBe(i32s.length);
-            expect(f32.length).toBe(i32s.length); // new length should be the same as the longest sibling
+            expect(i32).toHaveLength(i32s.length);
+            expect(f32).toHaveLength(i32s.length); // new length should be the same as the longest sibling
             expect(i32.nullable).toBe(true);
             expect(f32.nullable).toBe(true); // true, with 4 additional nulls
             expect(i32.nullCount).toBe(0);
@@ -278,7 +273,7 @@ describe(`Table`, () => {
             test(`has the correct length`, () => {
                 const table = datum.table();
                 const values = datum.values();
-                expect(table.length).toEqual(values.length);
+                expect(table).toHaveLength(values.length);
             });
             test(`gets expected values`, () => {
                 const table = datum.table();
@@ -321,6 +316,24 @@ describe(`Table`, () => {
                     const table = datum.table();
                     let bind = jest.fn();
                     table.scan(() => { }, bind);
+                    for (let batch of table.chunks) {
+                        expect(bind).toHaveBeenCalledWith(batch);
+                    }
+                });
+            });
+            describe(`scanReverse()`, () => {
+                test(`yields all values`, () => {
+                    const table = datum.table();
+                    let expected_idx = values.length;
+                    table.scanReverse((idx, batch) => {
+                        const columns = batch.schema.fields.map((_, i) => batch.getChildAt(i)!);
+                        expect(columns.map((c) => c.get(idx))).toEqual(values[--expected_idx]);
+                    });
+                });
+                test(`calls bind function with every batch`, () => {
+                    const table = datum.table();
+                    let bind = jest.fn();
+                    table.scanReverse(() => { }, bind);
                     for (let batch of table.chunks) {
                         expect(bind).toHaveBeenCalledWith(batch);
                     }
@@ -406,6 +419,10 @@ describe(`Table`, () => {
                             get_i32 = col('i32').bind(batch);
                         })),
                     expected: values.filter((row) => (row[F32] as number) * (row[I32] as number) > 0)
+                }, {
+                    name: `filter out all records`,
+                    filtered: table.filter(lit(1).eq(0)),
+                    expected: []
                 }
             ];
             for (let this_test of filter_tests) {
@@ -422,15 +439,31 @@ describe(`Table`, () => {
                                 expect(columns.map((c) => c.get(idx))).toEqual(expected[expected_idx++]);
                             });
                         });
-                        test(`calls bind function on every batch`, () => {
-                            // Techincally, we only need to call bind on
-                            // batches with data that match the predicate, so
-                            // this test may fail in the future if we change
-                            // that - and that's ok!
+                        test(`calls bind function lazily`, () => {
                             let bind = jest.fn();
                             filtered.scan(() => { }, bind);
-                            for (let batch of table.chunks) {
-                                expect(bind).toHaveBeenCalledWith(batch);
+                            if (expected.length) {
+                                expect(bind).toHaveBeenCalled();
+                            } else {
+                                expect(bind).not.toHaveBeenCalled();
+                            }
+                        });
+                    });
+                    describe(`scanReverse()`, () => {
+                        test(`iterates over expected values in reverse`, () => {
+                            let expected_idx = expected.length;
+                            filtered.scanReverse((idx, batch) => {
+                                const columns = batch.schema.fields.map((_, i) => batch.getChildAt(i)!);
+                                expect(columns.map((c) => c.get(idx))).toEqual(expected[--expected_idx]);
+                            });
+                        });
+                        test(`calls bind function lazily`, () => {
+                            let bind = jest.fn();
+                            filtered.scanReverse(() => { }, bind);
+                            if (expected.length) {
+                                expect(bind).toHaveBeenCalled();
+                            } else {
+                                expect(bind).not.toHaveBeenCalled();
                             }
                         });
                     });
@@ -464,11 +497,11 @@ describe(`Table`, () => {
             });
             test(`table.select() basic tests`, () => {
                 let selected = table.select('f32', 'dictionary');
-                expect(selected.schema.fields.length).toEqual(2);
+                expect(selected.schema.fields).toHaveLength(2);
                 expect(selected.schema.fields[0]).toEqual(table.schema.fields[0]);
                 expect(selected.schema.fields[1]).toEqual(table.schema.fields[2]);
 
-                expect(selected.length).toEqual(values.length);
+                expect(selected).toHaveLength(values.length);
                 let idx = 0, expected_row;
                 for (let row of selected) {
                     expected_row = values[idx++];
@@ -534,7 +567,7 @@ describe(`Predicate`, () => {
 //     return (new Array(n + 1).join(fill) + str).slice(-1 * n);
 // }
 
-type TestDataSchema = { f32: Float32; i32: Int32; dictionary: Dictionary<Utf8, Int8>; };
+type TestDataSchema = { f32: Float32; i32: Int32; dictionary: Dictionary<Utf8, Int8> };
 
 function getTestVectors(f32Values: number[], i32Values: number[], dictIndices: number[]) {
 
@@ -557,7 +590,9 @@ export function getSingleRecordBatchTable() {
 
 function getMultipleRecordBatchesTable() {
 
-    const schema = Schema.from<TestDataSchema>(getTestVectors([], [], []), NAMES);
+    const types = getTestVectors([], [], []).map((vec) => vec.type);
+    const fields = NAMES.map((name, i) => Field.new(name, types[i]));
+    const schema = new Schema<TestDataSchema>(fields);
 
     const b1 = new RecordBatch(schema, 3, getTestVectors(
         [-0.3, -0.2, -0.1],

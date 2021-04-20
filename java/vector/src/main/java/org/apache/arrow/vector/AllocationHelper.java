@@ -77,7 +77,7 @@ public class AllocationHelper {
   }
 
   /**
-   * Allocates the exact amount if v is fixed width, otherwise falls back to dynamic allocation
+   * Allocates the exact amount if v is fixed width, otherwise falls back to dynamic allocation.
    *
    * @param v          value vector we are trying to allocate
    * @param valueCount size we are trying to allocate
@@ -86,6 +86,8 @@ public class AllocationHelper {
   public static void allocateNew(ValueVector v, int valueCount) {
     if (v instanceof FixedWidthVector) {
       ((FixedWidthVector) v).allocateNew(valueCount);
+    } else if (v instanceof VariableWidthVector) {
+      ((VariableWidthVector) v).allocateNew(valueCount);
     } else {
       v.allocateNew();
     }

@@ -124,7 +124,7 @@ Status ExprValidator::Visit(const BooleanNode& node) {
   ARROW_RETURN_IF(
       node.children().size() < 2,
       Status::ExpressionValidationError("Boolean expression has ", node.children().size(),
-                                        " children, expected atleast two"));
+                                        " children, expected at least two"));
 
   for (auto& child : node.children()) {
     const auto bool_type = arrow::boolean();
@@ -155,6 +155,11 @@ Status ExprValidator::Visit(const InExpressionNode<int32_t>& node) {
 Status ExprValidator::Visit(const InExpressionNode<int64_t>& node) {
   return ValidateInExpression(node.values().size(), node.eval_expr()->return_type(),
                               arrow::int64());
+}
+
+Status ExprValidator::Visit(const InExpressionNode<gandiva::DecimalScalar128>& node) {
+  return ValidateInExpression(node.values().size(), node.eval_expr()->return_type(),
+                              arrow::decimal(node.get_precision(), node.get_scale()));
 }
 
 Status ExprValidator::Visit(const InExpressionNode<std::string>& node) {

@@ -15,15 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#include <cassert>
+#include <iostream>
+#include <string>
+
 #include <arrow/adapters/orc/adapter.h>
 #include <arrow/array.h>
 #include <arrow/buffer.h>
 #include <arrow/io/api.h>
 #include <arrow/ipc/api.h>
+#include <arrow/util/checked_cast.h>
 #include <arrow/util/logging.h>
-#include <cassert>
-#include <iostream>
-#include <string>
 
 #include "org_apache_arrow_adapter_orc_OrcMemoryJniWrapper.h"
 #include "org_apache_arrow_adapter_orc_OrcReaderJniWrapper.h"
@@ -49,6 +51,7 @@ static jmethodID record_batch_constructor;
 
 static jint JNI_VERSION = JNI_VERSION_1_6;
 
+using arrow::internal::checked_cast;
 using arrow::jni::ConcurrentMap;
 
 static ConcurrentMap<std::shared_ptr<arrow::Buffer>> buffer_holder_;
@@ -155,32 +158,24 @@ void JNI_OnUnload(JavaVM* vm, void* reserved) {
 
 JNIEXPORT jlong JNICALL Java_org_apache_arrow_adapter_orc_OrcReaderJniWrapper_open(
     JNIEnv* env, jobject this_obj, jstring file_path) {
-  std::shared_ptr<arrow::io::ReadableFile> in_file;
-
   std::string path = JStringToCString(env, file_path);
 
-  arrow::Status ret;
   if (path.find("hdfs://") == 0) {
     env->ThrowNew(io_exception_class, "hdfs path not supported yet.");
-  } else {
-    ret = arrow::io::ReadableFile::Open(path, &in_file);
   }
+  auto maybe_file = arrow::io::ReadableFile::Open(path);
 
-  if (ret.ok()) {
-    std::unique_ptr<ORCFileReader> reader;
-
-    ret = ORCFileReader::Open(
-        std::static_pointer_cast<arrow::io::RandomAccessFile>(in_file),
-        arrow::default_memory_pool(), &reader);
-
-    if (!ret.ok()) {
-      env->ThrowNew(io_exception_class, std::string("Failed open file" + path).c_str());
-    }
-
-    return orc_reader_holder_.Insert(std::shared_ptr<ORCFileReader>(reader.release()));
+  if (!maybe_file.ok()) {
+    return -static_cast<jlong>(maybe_file.status().code());
   }
-
-  return static_cast<jlong>(ret.code()) * -1;
+  std::unique_ptr<ORCFileReader> reader;
+  arrow::Status ret = ORCFileReader::Open(
+      std::static_pointer_cast<arrow::io::RandomAccessFile>(*maybe_file),
+      arrow::default_memory_pool(), &reader);
+  if (!ret.ok()) {
+    env->ThrowNew(io_exception_class, std::string("Failed open file" + path).c_str());
+  }
+  return orc_reader_holder_.Insert(std::shared_ptr<ORCFileReader>(reader.release()));
 }
 
 JNIEXPORT void JNICALL Java_org_apache_arrow_adapter_orc_OrcReaderJniWrapper_close(
@@ -231,16 +226,15 @@ Java_org_apache_arrow_adapter_orc_OrcStripeReaderJniWrapper_getSchema(JNIEnv* en
 
   auto schema = stripe_reader->schema();
 
-  std::shared_ptr<arrow::Buffer> out;
-  auto status =
-      arrow::ipc::SerializeSchema(*schema, nullptr, arrow::default_memory_pool(), &out);
-  if (!status.ok()) {
+  auto maybe_buffer = arrow::ipc::SerializeSchema(*schema, arrow::default_memory_pool());
+  if (!maybe_buffer.ok()) {
     return nullptr;
   }
+  auto buffer = *std::move(maybe_buffer);
 
-  jbyteArray ret = env->NewByteArray(out->size());
-  auto src = reinterpret_cast<const jbyte*>(out->data());
-  env->SetByteArrayRegion(ret, 0, out->size(), src);
+  jbyteArray ret = env->NewByteArray(buffer->size());
+  auto src = reinterpret_cast<const jbyte*>(buffer->data());
+  env->SetByteArrayRegion(ret, 0, buffer->size(), src);
   return ret;
 }
 
@@ -282,9 +276,16 @@ Java_org_apache_arrow_adapter_orc_OrcStripeReaderJniWrapper_next(JNIEnv* env,
 
   for (size_t j = 0; j < buffers.size(); ++j) {
     auto buffer = buffers[j];
+    uint8_t* data = nullptr;
+    int size = 0;
+    int64_t capacity = 0;
+    if (buffer != nullptr) {
+      data = (uint8_t*)buffer->data();
+      size = (int)buffer->size();
+      capacity = buffer->capacity();
+    }
     jobject memory = env->NewObject(orc_memory_class, orc_memory_constructor,
-                                    buffer_holder_.Insert(buffer), buffer->data(),
-                                    buffer->size(), buffer->capacity());
+                                    buffer_holder_.Insert(buffer), data, size, capacity);
     env->SetObjectArrayElement(memory_array, j, memory);
   }
 

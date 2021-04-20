@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-thirdparty/
+thirdparty/*.tar*
 CMakeFiles/
 CMakeCache.txt
 CTestTestfile.cmake
@@ -24,6 +24,10 @@ cmake_install.cmake
 build/
 *-build/
 Testing/
+build-support/boost_*
+
+# Build directories created by Clion
+cmake-build-*/
 
 #########################################
 # Editor temporary/working/backup files #

@@ -17,12 +17,12 @@
 
 package org.apache.arrow.gandiva.expression;
 
+import java.math.BigDecimal;
 import java.nio.charset.Charset;
 import java.util.Set;
 
 import org.apache.arrow.gandiva.exceptions.GandivaException;
 import org.apache.arrow.gandiva.ipc.GandivaTypes;
-import org.apache.arrow.vector.types.pojo.Field;
 
 import com.google.protobuf.ByteString;
 
@@ -34,61 +34,81 @@ public class InNode implements TreeNode {
 
   private final Set<Integer> intValues;
   private final Set<Long> longValues;
+  private final Set<BigDecimal> decimalValues;
   private final Set<String> stringValues;
   private final Set<byte[]> binaryValues;
-  private final Field field;
+  private final TreeNode input;
+
+  private final Integer precision;
+  private final Integer scale;
 
   private InNode(Set<Integer> values, Set<Long> longValues, Set<String> stringValues, Set<byte[]>
-          binaryValues, Field field) {
+          binaryValues, Set<BigDecimal> decimalValues, Integer precision, Integer scale, TreeNode node) {
     this.intValues = values;
     this.longValues = longValues;
+    this.decimalValues = decimalValues;
+    this.precision = precision;
+    this.scale = scale;
     this.stringValues = stringValues;
     this.binaryValues = binaryValues;
-    this.field = field;
+    this.input = node;
   }
 
-  public static InNode makeIntInExpr(Field field, Set<Integer> intValues) {
-    return new InNode(intValues, null, null, null ,field);
+  public static InNode makeIntInExpr(TreeNode node, Set<Integer> intValues) {
+    return new InNode(intValues,
+            null, null, null, null, null, null, node);
   }
 
-  public static InNode makeLongInExpr(Field field, Set<Long> longValues) {
-    return new InNode(null, longValues, null, null ,field);
+  public static InNode makeLongInExpr(TreeNode node, Set<Long> longValues) {
+    return new InNode(null, longValues,
+            null, null, null, null, null, node);
   }
 
-  public static InNode makeStringInExpr(Field field, Set<String> stringValues) {
-    return new InNode(null, null, stringValues, null ,field);
+  public static InNode makeDecimalInExpr(TreeNode node, Set<BigDecimal> decimalValues,
+                                         Integer precision, Integer scale) {
+    return new InNode(null, null, null, null,
+            decimalValues, precision, scale, node);
   }
 
-  public static InNode makeBinaryInExpr(Field field, Set<byte[]> binaryValues) {
-    return new InNode(null, null, null, binaryValues ,field);
+  public static InNode makeStringInExpr(TreeNode node, Set<String> stringValues) {
+    return new InNode(null, null, stringValues, null,
+            null, null, null, node);
+  }
+
+  public static InNode makeBinaryInExpr(TreeNode node, Set<byte[]> binaryValues) {
+    return new InNode(null, null, null, binaryValues,
+            null, null, null, node);
   }
 
   @Override
   public GandivaTypes.TreeNode toProtobuf() throws GandivaException {
     GandivaTypes.InNode.Builder inNode = GandivaTypes.InNode.newBuilder();
 
-    GandivaTypes.FieldNode.Builder fieldNode = GandivaTypes.FieldNode.newBuilder();
-    fieldNode.setField(ArrowTypeHelper.arrowFieldToProtobuf(field));
-    inNode.setField(fieldNode);
+    inNode.setNode(input.toProtobuf());
 
     if (intValues != null) {
-      GandivaTypes.IntConstants.Builder intConstants =  GandivaTypes.IntConstants.newBuilder();
+      GandivaTypes.IntConstants.Builder intConstants = GandivaTypes.IntConstants.newBuilder();
       intValues.stream().forEach(val -> intConstants.addIntValues(GandivaTypes.IntNode.newBuilder()
               .setValue(val).build()));
       inNode.setIntValues(intConstants.build());
     } else if (longValues != null) {
-      GandivaTypes.LongConstants.Builder longConstants =  GandivaTypes.LongConstants.newBuilder();
+      GandivaTypes.LongConstants.Builder longConstants = GandivaTypes.LongConstants.newBuilder();
       longValues.stream().forEach(val -> longConstants.addLongValues(GandivaTypes.LongNode.newBuilder()
               .setValue(val).build()));
       inNode.setLongValues(longConstants.build());
+    } else if (decimalValues != null) {
+      GandivaTypes.DecimalConstants.Builder decimalConstants = GandivaTypes.DecimalConstants.newBuilder();
+      decimalValues.stream().forEach(val -> decimalConstants.addDecimalValues(GandivaTypes.DecimalNode.newBuilder()
+              .setValue(val.toPlainString()).setPrecision(precision).setScale(scale).build()));
+      inNode.setDecimalValues(decimalConstants.build());
     } else if (stringValues != null) {
-      GandivaTypes.StringConstants.Builder stringConstants =  GandivaTypes.StringConstants
+      GandivaTypes.StringConstants.Builder stringConstants = GandivaTypes.StringConstants
               .newBuilder();
       stringValues.stream().forEach(val -> stringConstants.addStringValues(GandivaTypes.StringNode
               .newBuilder().setValue(ByteString.copyFrom(val.getBytes(charset))).build()));
       inNode.setStringValues(stringConstants.build());
     } else if (binaryValues != null) {
-      GandivaTypes.BinaryConstants.Builder binaryConstants =  GandivaTypes.BinaryConstants
+      GandivaTypes.BinaryConstants.Builder binaryConstants = GandivaTypes.BinaryConstants
               .newBuilder();
       binaryValues.stream().forEach(val -> binaryConstants.addBinaryValues(GandivaTypes.BinaryNode
               .newBuilder().setValue(ByteString.copyFrom(val)).build()));
@@ -97,6 +117,5 @@ public class InNode implements TreeNode {
     GandivaTypes.TreeNode.Builder builder = GandivaTypes.TreeNode.newBuilder();
     builder.setInNode(inNode.build());
     return builder.build();
-
   }
 }

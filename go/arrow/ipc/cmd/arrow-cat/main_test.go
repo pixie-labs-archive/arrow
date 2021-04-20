@@ -31,6 +31,12 @@ import (
 )
 
 func TestCatStream(t *testing.T) {
+	tempDir, err := ioutil.TempDir("", "go-arrow-cat-stream-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
 	for _, tc := range []struct {
 		name string
 		want string
@@ -78,9 +84,9 @@ record 3...
 		{
 			name: "structs",
 			want: `record 1...
-  col[0] "struct_nullable": {[-1 (null) (null) -4 -5 (null) -11 (null) (null) -14 -15 -21 (null) (null) -24 -25 -31 (null) (null) -34 -35 -41 (null) (null) -44 -45] ["111" (null) (null) "444" "555" (null) "1111" (null) (null) "1444" "1555" "2111" (null) (null) "2444" "2555" "3111" (null) (null) "3444" "3555" "4111" (null) (null) "4444" "4555"]}
+  col[0] "struct_nullable": {[-1 (null) (null) -4 -5 -11 (null) (null) -14 -15 -21 (null) (null) -24 -25 -31 (null) (null) -34 -35 -41 (null) (null) -44 -45] ["111" (null) (null) "444" "555" "1111" (null) (null) "1444" "1555" "2111" (null) (null) "2444" "2555" "3111" (null) (null) "3444" "3555" "4111" (null) (null) "4444" "4555"]}
 record 2...
-  col[0] "struct_nullable": {[1 (null) (null) 4 5 (null) 11 (null) (null) 14 15 (null) 21 (null) (null) 24 25 31 (null) (null) 34 35 41 (null) (null) 44 45] ["-111" (null) (null) "-444" "-555" (null) "-1111" (null) (null) "-1444" "-1555" (null) "-2111" (null) (null) "-2444" "-2555" "-3111" (null) (null) "-3444" "-3555" "-4111" (null) (null) "-4444" "-4555"]}
+  col[0] "struct_nullable": {[1 (null) (null) 4 5 11 (null) (null) 14 15 21 (null) (null) 24 25 31 (null) (null) 34 35 41 (null) (null) 44 45] ["-111" (null) (null) "-444" "-555" "-1111" (null) (null) "-1444" "-1555" "-2111" (null) (null) "-2444" "-2555" "-3111" (null) (null) "-3444" "-3555" "-4111" (null) (null) "-4444" "-4555"]}
 `,
 		},
 		{
@@ -174,7 +180,7 @@ record 3...
 			defer mem.AssertSize(t, 0)
 
 			fname := func() string {
-				f, err := ioutil.TempFile("", "go-arrow-")
+				f, err := ioutil.TempFile(tempDir, "go-arrow-cat-stream-")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -202,7 +208,6 @@ record 3...
 
 				return f.Name()
 			}()
-			defer os.Remove(fname)
 
 			f, err := os.Open(fname)
 			if err != nil {
@@ -224,6 +229,12 @@ record 3...
 }
 
 func TestCatFile(t *testing.T) {
+	tempDir, err := ioutil.TempDir("", "go-arrow-cat-file-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
 	for _, tc := range []struct {
 		name   string
 		want   string
@@ -272,7 +283,7 @@ record 3...
 		},
 		{
 			name: "primitives",
-			want: `version: V4
+			want: `version: V5
 record 1/3...
   col[0] "bools": [true (null) (null) false true]
   col[1] "int8s": [-1 (null) (null) -4 -5]
@@ -315,18 +326,18 @@ record 3/3...
 			stream: true,
 			name:   "structs",
 			want: `record 1...
-  col[0] "struct_nullable": {[-1 (null) (null) -4 -5 (null) -11 (null) (null) -14 -15 -21 (null) (null) -24 -25 -31 (null) (null) -34 -35 -41 (null) (null) -44 -45] ["111" (null) (null) "444" "555" (null) "1111" (null) (null) "1444" "1555" "2111" (null) (null) "2444" "2555" "3111" (null) (null) "3444" "3555" "4111" (null) (null) "4444" "4555"]}
+  col[0] "struct_nullable": {[-1 (null) (null) -4 -5 -11 (null) (null) -14 -15 -21 (null) (null) -24 -25 -31 (null) (null) -34 -35 -41 (null) (null) -44 -45] ["111" (null) (null) "444" "555" "1111" (null) (null) "1444" "1555" "2111" (null) (null) "2444" "2555" "3111" (null) (null) "3444" "3555" "4111" (null) (null) "4444" "4555"]}
 record 2...
-  col[0] "struct_nullable": {[1 (null) (null) 4 5 (null) 11 (null) (null) 14 15 (null) 21 (null) (null) 24 25 31 (null) (null) 34 35 41 (null) (null) 44 45] ["-111" (null) (null) "-444" "-555" (null) "-1111" (null) (null) "-1444" "-1555" (null) "-2111" (null) (null) "-2444" "-2555" "-3111" (null) (null) "-3444" "-3555" "-4111" (null) (null) "-4444" "-4555"]}
+  col[0] "struct_nullable": {[1 (null) (null) 4 5 11 (null) (null) 14 15 21 (null) (null) 24 25 31 (null) (null) 34 35 41 (null) (null) 44 45] ["-111" (null) (null) "-444" "-555" "-1111" (null) (null) "-1444" "-1555" "-2111" (null) (null) "-2444" "-2555" "-3111" (null) (null) "-3444" "-3555" "-4111" (null) (null) "-4444" "-4555"]}
 `,
 		},
 		{
 			name: "structs",
-			want: `version: V4
+			want: `version: V5
 record 1/2...
-  col[0] "struct_nullable": {[-1 (null) (null) -4 -5 (null) -11 (null) (null) -14 -15 -21 (null) (null) -24 -25 -31 (null) (null) -34 -35 -41 (null) (null) -44 -45] ["111" (null) (null) "444" "555" (null) "1111" (null) (null) "1444" "1555" "2111" (null) (null) "2444" "2555" "3111" (null) (null) "3444" "3555" "4111" (null) (null) "4444" "4555"]}
+  col[0] "struct_nullable": {[-1 (null) (null) -4 -5 -11 (null) (null) -14 -15 -21 (null) (null) -24 -25 -31 (null) (null) -34 -35 -41 (null) (null) -44 -45] ["111" (null) (null) "444" "555" "1111" (null) (null) "1444" "1555" "2111" (null) (null) "2444" "2555" "3111" (null) (null) "3444" "3555" "4111" (null) (null) "4444" "4555"]}
 record 2/2...
-  col[0] "struct_nullable": {[1 (null) (null) 4 5 (null) 11 (null) (null) 14 15 (null) 21 (null) (null) 24 25 31 (null) (null) 34 35 41 (null) (null) 44 45] ["-111" (null) (null) "-444" "-555" (null) "-1111" (null) (null) "-1444" "-1555" (null) "-2111" (null) (null) "-2444" "-2555" "-3111" (null) (null) "-3444" "-3555" "-4111" (null) (null) "-4444" "-4555"]}
+  col[0] "struct_nullable": {[1 (null) (null) 4 5 11 (null) (null) 14 15 21 (null) (null) 24 25 31 (null) (null) 34 35 41 (null) (null) 44 45] ["-111" (null) (null) "-444" "-555" "-1111" (null) (null) "-1444" "-1555" "-2111" (null) (null) "-2444" "-2555" "-3111" (null) (null) "-3444" "-3555" "-4111" (null) (null) "-4444" "-4555"]}
 `,
 		},
 		{
@@ -344,7 +355,7 @@ record 4...
 		},
 		{
 			name: "lists",
-			want: `version: V4
+			want: `version: V5
 record 1/4...
   col[0] "list_nullable": [[1 (null) (null) 4 5] [11 (null) (null) 14 15] [21 (null) (null) 24 25]]
 record 2/4...
@@ -371,7 +382,7 @@ record 3...
 		},
 		{
 			name: "strings",
-			want: `version: V4
+			want: `version: V5
 record 1/3...
   col[0] "strings": ["1é" (null) (null) "4" "5"]
   col[1] "bytes": ["1é" (null) (null) "4" "5"]
@@ -396,7 +407,7 @@ record 3...
 		},
 		{
 			name: "fixed_size_lists",
-			want: `version: V4
+			want: `version: V5
 record 1/3...
   col[0] "fixed_size_list_nullable": [[1 (null) 3] [11 (null) 13] [21 (null) 23]]
 record 2/3...
@@ -448,7 +459,7 @@ record 3...
 		},
 		{
 			name: "fixed_width_types",
-			want: `version: V4
+			want: `version: V5
 record 1/3...
   col[0] "float16s": [1 (null) (null) 4 5]
   col[1] "time32ms": [-2 (null) (null) 1 2]
@@ -500,7 +511,7 @@ record 3...
 		},
 		{
 			name: "fixed_size_binaries",
-			want: `version: V4
+			want: `version: V5
 record 1/3...
   col[0] "fixed_size_binary_3": ["001" (null) (null) "004" "005"]
 record 2/3...
@@ -515,7 +526,7 @@ record 3/3...
 			defer mem.AssertSize(t, 0)
 
 			fname := func() string {
-				f, err := ioutil.TempFile("", "go-arrow-")
+				f, err := ioutil.TempFile(tempDir, "go-arrow-cat-file-")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -556,7 +567,6 @@ record 3/3...
 
 				return f.Name()
 			}()
-			defer os.Remove(fname)
 
 			w := new(bytes.Buffer)
 			err := processFile(w, fname)
